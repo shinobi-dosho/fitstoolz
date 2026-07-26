@@ -21,7 +21,7 @@ dependencies = [
     # floor is a security-relevant number, not just a compatibility one (see
     # SECURITY.md). The `<8.0` ceiling keeps a major bump a deliberate,
     # separately-reviewed change rather than something a resolver picks up.
-    "astropy>=7.0,<8.0",
+    "astropy>=7.0,<9.0",
     # Floor raised from >=8.1 for PYSEC-2026-2132 (command injection in
     # `click.edit()`, fixed in 8.3.3). fitstoolz never calls `click.edit()`, so
     # nothing here was exploitable -- but the lock alone only protects this
