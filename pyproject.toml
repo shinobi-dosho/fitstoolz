@@ -1,6 +1,6 @@
 [project]
 name = "fitstoolz"
-version = "0.1.0b3"
+version = "0.1.0b4"
 description = "Python libraries for interfacing with FITS data in an intuitive way"
 authors = [
     {name="Sphesihle Makhathini", email="sphemakh@gmail.com"},
@@ -17,8 +17,18 @@ dependencies = [
     "numpy>=2.0",
     "dask[array] >=2023.1.1",
     "xarray >=2023.01.0",
+    # astropy owns the FITS and WCS parsing this package is built on, so its
+    # floor is a security-relevant number, not just a compatibility one (see
+    # SECURITY.md). The `<8.0` ceiling keeps a major bump a deliberate,
+    # separately-reviewed change rather than something a resolver picks up.
     "astropy>=7.0,<8.0",
-    "click>=8.1",
+    # Floor raised from >=8.1 for PYSEC-2026-2132 (command injection in
+    # `click.edit()`, fixed in 8.3.3). fitstoolz never calls `click.edit()`, so
+    # nothing here was exploitable -- but the lock alone only protects this
+    # repo's checkouts, and a downstream `pip install fitstoolz` against the old
+    # floor could still resolve a flagged release. Raising it is free; click's
+    # 8.x API is stable.
+    "click>=8.3.3",
     "pydantic>=2.6",
     "stimela-ninja>=0.1.0b3",
 ]
@@ -28,7 +38,22 @@ requires = ["hatchling"]
 build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.sdist]
-include = ["src/fitstoolz", "tests", "CHANGELOG.md"]
+# Anchor patterns to the repo root (leading "/"); unanchored names match at any
+# depth (gitignore semantics) and would drag in nested README/LICENSE files from
+# .venv, docs/_build and the like.
+include = [
+    "/src/fitstoolz",
+    "/tests",
+    "/README.rst",
+    "/LICENSE",
+    "/CHANGELOG.md",
+    "/AGENTS.md",
+    "/CONTRIBUTING.md",
+    "/CODE_OF_CONDUCT.md",
+    "/SECURITY.md",
+    "/CITATION.cff",
+    "/pyproject.toml",
+]
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/fitstoolz"]
@@ -36,12 +61,9 @@ packages = ["src/fitstoolz"]
 [project.scripts]
 fitstoolz = "fitstoolz.apps.main:cli"
 
-
-
 [dependency-groups]
 
 ruff = [
-    "pre-commit>=4.3.0",
     "ruff>=0.12.9",
 ]
 
@@ -51,22 +73,94 @@ tests = [
     {include-group = "ruff"},
 ]
 
+# Documentation build (Sphinx + Furo + autodoc). `uv sync --group docs`.
+# Keep in sync with docs/requirements.txt, which is what Read the Docs installs.
 docs = [
-    "Sphinx>=7.0,<9.0",
-    "sphinx-copybutton",
-    "sphinx-rtd-theme",
-    "sphinx_click",
-    "sphinx-autodoc-typehints",
-    "docutils",
+    "Sphinx>=7.2,<9.0",
+    "furo>=2024.1",
+    "sphinx-copybutton>=0.5",
+    "sphinx-click>=5.0",
+    "sphinx-autodoc-typehints>=2.0",
+    "myst-parser>=2.0",
 ]
 
+# Dependency vulnerability scanning. `.githooks/pre-commit` and the `audit` CI
+# job both run `uv run --group audit pip-audit`. Its own group rather than part
+# of `tests`: every job in the test matrix installs `tests` and none of them
+# audit, so folding it in there buys three extra resolve-and-downloads to serve
+# one job. No upper bound -- pip-audit is a client for PyPI's advisory API, and
+# the useful version of that is whatever is current.
+audit = [
+    "pip-audit>=2.7",
+]
+
+# Everything a contributor needs in one sync: the test/lint toolchain plus the
+# notebook kit for poking at FITS files by hand.
 dev = [
     "jupyter",
     "matplotlib",
-    {include-group = "ruff"},
+    {include-group = "tests"},
 ]
 
 [project.urls]
-Documentation = "https://fitstoolz.readthedocs.org"
-Repository = "https://github.com/SpheMakh/fitstoolz.git"
-"Issue Tracker" = "https://github.com/SpheMakh/fitstoolz/issues"
+Homepage = "https://github.com/shinobi-dosho/fitstoolz"
+Documentation = "https://fitstoolz.readthedocs.io"
+Repository = "https://github.com/shinobi-dosho/fitstoolz"
+"Issue Tracker" = "https://github.com/shinobi-dosho/fitstoolz/issues"
+Changelog = "https://github.com/shinobi-dosho/fitstoolz/blob/main/CHANGELOG.md"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 120
+target-version = "py311"
+
+# `select`, not `extend-select`. This list is the repo's *whole* ruleset,
+# stated outright rather than inherited from whatever ruff happens to enable
+# this month.
+#
+# It used to be `extend-select = ["E501", "I"]`, i.e. "ruff's default, plus
+# these" -- and ruff 0.16.0 widened that default, putting 25 findings on an
+# untouched `main` and turning the next PR red with nothing in it to blame.
+#
+# Adopting a broader ruleset is a fine thing to decide -- but it should be
+# decided, not inherited from a dependency bump. The set below is that decision:
+# it matches stimela-ninja's, plus `I` and `E501`, which this repo was already
+# enforcing and which still pass. Extend it deliberately.
+[tool.ruff.lint]
+select = [
+    "F",     # pyflakes -- real errors: undefined names, unused imports
+    "E",     # pycodestyle errors
+    "W",     # pycodestyle warnings
+    "I",     # isort -- import sorting
+    "C4",    # comprehension rewrites
+    "DTZ",   # naive datetimes
+    "ERA",   # commented-out code
+    "EXE",   # shebang/executable-bit mismatches
+    "FA",    # missing `from __future__ import annotations`
+    "FURB",  # modernizations
+    "G",     # logging call format (no f-strings in logger.* -- lazy % args)
+    "ICN",   # conventional import aliases
+    "ISC",   # implicit string concatenation
+    "LOG",   # logging misuse
+    "PGH",   # blanket `# noqa` / `# type: ignore` without a code
+    "Q",     # quote style
+    "RSE",   # `raise X()` not `raise X`
+    "T10",   # stray debugger imports
+    "T20",   # stray `print` (output goes through click/logging)
+    "TID",   # relative-import hygiene
+    "YTT",   # sys.version misuse
+]
+
+# Families deliberately NOT selected. Each is a real decision to make, not an
+# oversight -- opt one in by moving it up and clearing its findings:
+#
+#   B      flake8-bugbear
+#   SIM    nested `with` merges and similar
+#   UP     `Optional[X]` -> `X | None`; `reader.py`/`utils.py` still use
+#          typing.List/Dict, which this would rewrite wholesale
+#   RUF    incl. unused-`noqa` for rules not selected above
+#   PL     pylint port
+#   ANN / D / S  -- annotations, docstring style, bandit; each is a
+#          project-wide policy choice, not a cleanup

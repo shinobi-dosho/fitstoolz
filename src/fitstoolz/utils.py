@@ -7,6 +7,35 @@ from astropy.table import Table
 from astropy.wcs import WCS
 
 
+def open_fits(fname, **kwargs) -> fits.HDUList:
+    """Open a local FITS file.
+
+    Every FITS read in fitstoolz goes through here, so the "filenames are paths,
+    never URLs" boundary in ``SECURITY.md`` holds in one place instead of being
+    re-derived at each call site.
+
+    ``astropy.io.fits.open`` treats a string that looks like a URL as something
+    to fetch (via ``astropy.utils.data.download_file``), so an unchecked name
+    turns a filename argument into an outbound network request. Requiring the
+    path to exist rejects that, and passing astropy a ``Path`` rather than the
+    original string means it never gets to make the judgement itself.
+
+    Args:
+        fname (str|Path): Path to a FITS file on the local filesystem.
+        **kwargs: Passed through to ``astropy.io.fits.open`` (``memmap``, etc).
+
+    Returns:
+        astropy.io.fits.HDUList: The opened file.
+
+    Raises:
+        FileNotFoundError: If no such path exists locally.
+    """
+    path = Path(fname)
+    if not path.exists():
+        raise FileNotFoundError(f"Input FITS file '{fname}' does not exist")
+    return fits.open(path, **kwargs)
+
+
 def reorder_wcs(wcs, old_order: List[str], new_order: List[str]) -> WCS:
     """Reorder wcs axes
 
@@ -50,8 +79,6 @@ def beam_unit(header) -> units.Unit:
 
 def get_beam_table(fname: Path):
     fname = Path(fname)
-    if not fname.exists():
-        raise FileNotFoundError(f"Input FITS file '{fname}' does not exist")
 
     beam_info = {
         "BMAJ": [],
@@ -63,7 +90,7 @@ def get_beam_table(fname: Path):
 
     beam_table = None
     # accept the first beam table in hdulist
-    with fits.open(fname) as hdulist:
+    with open_fits(fname) as hdulist:
         header = hdulist[0].header
         for hdu in hdulist:
             if isinstance(hdu, fits.BinTableHDU):

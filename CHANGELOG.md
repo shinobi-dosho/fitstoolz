@@ -49,6 +49,50 @@ tool) — the pattern simms 3.0 already uses.
 - `fitstoolz.apps.<app>.step` is a uniform handle on each app's `StepRef`, for callers
   that resolve an app by name rather than by import.
 
+### Security
+
+- **`fitstoolz.utils.open_fits` is now the single door for reading FITS files**, and
+  `FitsData`, `get_beam_table`, `expand_along_axis_from_files` and the `header` app all
+  go through it. `astropy.io.fits.open` *fetches* a string that looks like a URL (via
+  `astropy.utils.data.download_file`), so an unchecked filename argument was an outbound
+  network request waiting to happen. The existence check that prevents this previously
+  existed at some call sites and not others — `header` and the `--extra-files` path of
+  `stack` would have fetched a URL — so which entry point you came through decided
+  whether the boundary held. `open_fits` resolves the name to a `Path`, requires it to
+  exist locally, and hands astropy the `Path` rather than the original string.
+- **Added `SECURITY.md`**, describing the actual surface: FITS files are untrusted input,
+  the parsers are astropy's and wcslib's (so dependency freshness *is* the control),
+  there is no code-execution path in fitstoolz, filenames are paths and never URLs, and
+  every write clobbers its destination while no write ever invents one.
+- **A dependency audit now gates commits and CI.** `pip-audit` runs over the locked
+  runtime dependencies in the new `audit` CI job, in `release.yml` before publishing, and
+  in `.githooks/pre-commit` on any commit touching `pyproject.toml` or `uv.lock` — the
+  same two commands in all three places.
+- **CI installs from `uv.lock` with `--locked`** instead of resolving fresh from PyPI, so
+  the astropy under test is a known version rather than whatever shipped that morning.
+  Dependabot (`.github/dependabot.yaml`) opens the upgrade PRs; a runtime *major* —
+  astropy, numpy, pydantic, dask — is deliberately never batched.
+
+### Project
+
+- Added `CONTRIBUTING.md`, `CODE_OF_CONDUCT.md` (Contributor Covenant 2.1), `AGENTS.md`
+  (design conventions — axis ordering, the app module shape, what not to add) and
+  `CITATION.cff`, plus GitHub issue/PR templates.
+- **Docs restructured**: `docs/source/` flattened to `docs/`, Furo theme, and new
+  quickstart, generated CLI reference (`sphinx-click`), API, security and contributing
+  pages. `docs/requirements.txt` is what Read the Docs installs.
+- **The ruff rule set is pinned explicitly in `pyproject.toml`** and widened to match
+  stimela-ninja's (adding `C4`, `DTZ`, `ERA`, `FURB`, `G`, `ISC`, `LOG`, `PGH`, `Q`,
+  `T20`, `TID` and others to the existing `E`/`F`/`I`/`E501`). `ruff.toml` is gone.
+  Logging calls now use lazy `%` arguments rather than f-strings.
+- **The pre-commit *framework* has been replaced by a tracked `.githooks/pre-commit`.**
+  The two cannot coexist — `core.hooksPath` makes git ignore `.git/hooks/` — so existing
+  clones need `git config core.hooksPath .githooks` once. The hook runs ruff on every
+  commit and the dependency audit only on dependency commits.
+- `uv sync --group dev` now includes the test toolchain, and the `Repository` and
+  `Issue Tracker` URLs point at `shinobi-dosho/fitstoolz` rather than the old
+  `SpheMakh/fitstoolz`.
+
 ## [0.1.0b3] — 2026-07-10
 
 First release since the package was restructured around `FitsData`. It corrects the

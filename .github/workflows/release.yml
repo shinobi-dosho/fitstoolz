@@ -1,7 +1,7 @@
 # Publishes to PyPI when a v* tag is pushed.
 #
 # Release procedure:
-#   1. Bump `version` in pyproject.toml and land it on main.
+#   1. Bump `version` in pyproject.toml, update CHANGELOG.md, land it on main.
 #   2. git tag -a v0.1.0 -m 'fitstoolz 0.1.0' && git push origin v0.1.0
 #
 # The tag must match the version in pyproject.toml; the build job refuses to
@@ -23,17 +23,14 @@ jobs:
 
     steps:
     - uses: actions/checkout@v4
-    - name: Set up Python
-      uses: actions/setup-python@v5
-      with:
-        python-version: "3.12"
 
-    - name: Install dependencies
-      run: |
-        python -m pip install --upgrade pip
-        python -m pip install .
-        python -m pip install --group tests
-        python -m pip install build twine
+    - name: Install uv
+      uses: astral-sh/setup-uv@v5
+      with:
+        enable-cache: true
+
+    - name: Install Python
+      run: uv python install 3.12
 
     - name: Check the tag matches pyproject version
       run: |
@@ -45,14 +42,27 @@ jobs:
         fi
         echo "releasing $version"
 
+    # --locked, as in ci.yml: what gets published is what was tested against the
+    # pinned dependency set, not a fresh resolve that happens at tag time.
     - name: Test
-      run: pytest -q
+      run: uv run --locked --group tests pytest -q
+
+    # A release is the last point at which a known-vulnerable pin can still be
+    # kept off PyPI, so the same audit CI runs on every PR runs again here --
+    # a tag can be cut weeks after the commit that last passed it.
+    - name: Audit locked runtime dependencies
+      run: |
+        uv export --frozen --no-emit-project --no-default-groups --no-hashes \
+          --format requirements-txt -o requirements-audit.txt
+        uv run --locked --group audit pip-audit --no-deps --requirement requirements-audit.txt
 
     - name: Build sdist and wheel
-      run: python -m build
+      run: |
+        rm -rf dist
+        uv build
 
     - name: Check distribution metadata
-      run: twine check --strict dist/*
+      run: uvx twine check --strict dist/*
 
     - uses: actions/upload-artifact@v4
       with:
@@ -72,6 +82,14 @@ jobs:
         name: dist
         path: dist/
 
+    # Publishing is gated on the `pypi` environment, so the token is only
+    # reachable from a run that got past the build job above.
+    #
+    # Worth upgrading to PyPI trusted publishing (OIDC) when convenient: add
+    # `permissions: id-token: write` to this job, configure the publisher on
+    # PyPI, and drop the `with:` block entirely -- that removes the long-lived
+    # token from the repo's secrets altogether. It needs the PyPI-side setup
+    # done first, so it is not changed here.
     - name: Publish to PyPI
       uses: pypa/gh-action-pypi-publish@release/v1
       with:

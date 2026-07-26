@@ -196,7 +196,7 @@ def test_get_data_full_and_sliced(config):
 def test_get_xds_transposes_and_chunks(config):
     path = write_fits(config, npix=16, nchan=4, nstokes=2)
     fds = FitsData(path)
-    xds = fds.get_xds(transpose=["STOKES", "RA", "DEC", "FREQ"], chunks=dict(RA=8, DEC=8))
+    xds = fds.get_xds(transpose=["STOKES", "RA", "DEC", "FREQ"], chunks={"RA": 8, "DEC": 8})
     assert xds.dims == ("stokes", "celestial.ra", "celestial.dec", "spectral")
     assert xds.shape == (2, 16, 16, 4)
     assert xds.chunks[1][0] == 8

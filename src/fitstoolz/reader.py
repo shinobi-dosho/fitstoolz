@@ -10,16 +10,13 @@ from astropy.io import fits
 from astropy.table import Table
 from astropy.wcs import WCS
 
-from fitstoolz.utils import get_beam_table
+from fitstoolz.utils import get_beam_table, open_fits
 
 
 class FitsData:
     def __init__(self, fname: str, memmap: bool = True):
         self.fname = Path(fname)
-        if not self.fname.exists():
-            raise FileNotFoundError(f"Input FITS file '{fname}' does not exist")
-
-        self.hdulist = fits.open(self.fname, memmap=memmap)
+        self.hdulist = open_fits(self.fname, memmap=memmap)
         self.phdu = self.hdulist[0]
         self.header = self.phdu.header
         self.wcs = WCS(self.header)
@@ -343,7 +340,7 @@ class FitsData:
     def expand_along_axis_from_files(self, name, files: List[Path]):
         idx = self.coord_index(name)
         for fname in files:
-            with fits.open(fname, memmap=True) as hdul:
+            with open_fits(fname, memmap=True) as hdul:
                 slc = [slice(None)] * self.ndim
                 if self.ndim != hdul[0].data.ndim:
                     slc[idx] = da.newaxis
@@ -393,7 +390,7 @@ class FitsData:
 
         return self.open_arrays[-1]
 
-    def get_xds(self, data_slice=[], transpose=[], chunks=dict(RA=64, DEC=64), **kwargs):
+    def get_xds(self, data_slice=[], transpose=[], chunks={"RA": 64, "DEC": 64}, **kwargs):
         dim_chunks = {}
         # swap coords for dims in chunks
         for key, val in chunks.items():

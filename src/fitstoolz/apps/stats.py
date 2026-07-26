@@ -53,9 +53,9 @@ def runit(opts):
         dmin, dmax, dmean, dstd = da.compute(data.min(), data.max(), data.mean(), data.std())
 
         if opts.show:
-            log.info(f"min={dmin:.6g}  max={dmax:.6g}  mean={dmean:.6g}  std={dstd:.6g}")
+            log.info("min=%.6g  max=%.6g  mean=%.6g  std=%.6g", dmin, dmax, dmean, dstd)
         else:
-            log.info(f"Data standard deviation: {dstd}")
+            log.info("Data standard deviation: %s", dstd)
 
     return StatsOutputs(min=float(dmin), max=float(dmax), mean=float(dmean), std=float(dstd))
 

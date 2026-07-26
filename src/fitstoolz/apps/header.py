@@ -2,20 +2,24 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
+import click
 import shinobi
-from astropy.io import fits
 from pydantic import Field
 
 from fitstoolz.apps import FitsOutputs
 from fitstoolz.apps._cli import make_command
+from fitstoolz.utils import open_fits
 
 app = "header"
 
 
 def runit(opts):
     if opts.show:
-        with fits.open(opts.fname) as hdul:
-            print(repr(hdul[0].header))
+        with open_fits(opts.fname) as hdul:
+            # The header dump is this command's product, not a log line, so it
+            # goes to stdout on its own -- pipe `header --show` into grep and
+            # you get the header, not the logger's timestamps.
+            click.echo(repr(hdul[0].header))
         return None
 
     outfile = None
@@ -28,7 +32,7 @@ def runit(opts):
         raise RuntimeError("Neither --replace nor --outfile is set. Cannot add/remove/edit.")
 
     updates = {}
-    hdul = fits.open(opts.fname)
+    hdul = open_fits(opts.fname)
 
     if opts.edit or opts.add:
         if opts.edit:

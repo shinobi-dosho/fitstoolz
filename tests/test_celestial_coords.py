@@ -34,17 +34,17 @@ def write_image(config, naxis1, naxis2, crval1, crval2, cdelt, ndim=2, ctype="SI
     header["CRPIX2"] = naxis2 // 2 + 1
     header["CUNIT2"] = "deg"
     if ndim == 4:
-        for key, value in dict(
-            CTYPE3="FREQ",
-            CRVAL3=1.4e9,
-            CDELT3=1e6,
-            CRPIX3=1,
-            CUNIT3="Hz",
-            CTYPE4="STOKES",
-            CRVAL4=1,
-            CDELT4=1,
-            CRPIX4=1,
-        ).items():
+        for key, value in {
+            "CTYPE3": "FREQ",
+            "CRVAL3": 1.4e9,
+            "CDELT3": 1e6,
+            "CRPIX3": 1,
+            "CUNIT3": "Hz",
+            "CTYPE4": "STOKES",
+            "CRVAL4": 1,
+            "CDELT4": 1,
+            "CRPIX4": 1,
+        }.items():
             header[key] = value
     path = config.random_named_file(suffix=".fits")
     fits.PrimaryHDU(np.zeros(shape), header=header).writeto(path, overwrite=True)
