@@ -1,11 +1,13 @@
+import importlib
+
 import numpy as np
 import pytest
 from astropy.io import fits
 from astropy.wcs import WCS
 from click.testing import CliRunner
 
-from fitstoolz.apps import get_app_config, outfits_name
 from fitstoolz.apps import main as main_group
+from fitstoolz.apps import outfits_name
 from fitstoolz.reader import FitsData
 
 from . import InitTest
@@ -169,10 +171,68 @@ def test_outfits_name_none():
     assert result is None
 
 
-def test_get_app_config():
-    cfg = get_app_config("header")
-    assert "inputs" in cfg
-    assert "fname" in cfg.inputs
+def test_app_inputs_models():
+    """Every app is a shinobi pystep whose signature is the schema authority."""
+    for app_name, import_path in main_group.app_dict.items():
+        modname = import_path.rsplit(".", 1)[0]
+        mod = importlib.import_module(modname)
+        step = getattr(mod, "step")
+        assert step.step.name == app_name
+        fields = step.step.inputs_model.model_fields
+        assert fields["fname"].is_required()
+        assert "log_level" in fields
+
+
+def test_unstack_not_implemented(config: InitTest):
+    runner = CliRunner()
+    result = runner.invoke(main_group.cli, f"unstack --axis FREQ {config.example_fits_file()}")
+    assert result.exit_code != 0
+    assert isinstance(result.exception, NotImplementedError)
+
+
+def test_apps_chain_in_a_recipe(config: InitTest):
+    """Two apps wired into a shinobi Recipe: add-axis' output path feeds remove-axis."""
+    from pydantic import BaseModel
+    from shinobi import Recipe
+
+    from fitstoolz.apps import FitsOutputs
+    from fitstoolz.apps.add_axis import add_axis
+    from fitstoolz.apps.remove_axis import remove_axis
+
+    class ChainInputs(BaseModel):
+        fname: str
+        mid: str
+        final: str
+
+    chain = Recipe(name="chain", inputs_model=ChainInputs, outputs_model=FitsOutputs)
+    chain.add_step("add", add_axis, fname=chain.inputs.fname, ctype="STOKES", index=4, outfile=chain.inputs.mid)
+    chain.add_step("remove", remove_axis, fname=chain.outputs.add.outfile, ctype="STOKES", outfile=chain.inputs.final)
+    chain.set_output("outfile", chain.outputs.remove.outfile)
+
+    mid = config.random_named_file(suffix=".fits")
+    final = config.random_named_file(suffix=".fits")
+    result = chain(fname=config.example_fits_file(), mid=mid, final=final)
+
+    assert result.success
+    assert result.outputs.outfile == final
+
+    myfits = FitsData(mid)
+    assert "STOKES" in myfits.coord_names
+    myfits.close()
+
+    myfits = FitsData(final)
+    assert "STOKES" not in myfits.coord_names
+    myfits.close()
+
+
+def test_stats_step_returns_outputs(config: InitTest):
+    """A pystep run outside click returns its typed outputs."""
+    from fitstoolz.apps.stats import stats
+
+    result = stats(fname=config.example_fits_file())
+    assert result.success
+    assert result.outputs.std > 0
+    assert result.outputs.min <= result.outputs.mean <= result.outputs.max
 
 
 def test_stats_show_slice_and_clipping(config: InitTest):

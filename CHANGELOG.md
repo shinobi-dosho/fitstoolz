@@ -6,6 +6,49 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html). While the
 major version is zero, a minor bump may carry breaking changes.
 
+## [Unreleased]
+
+The CLI is now built on shinobi (stimela-ninja, Stimela 3.0) instead of scabha. Each app
+is a `@shinobi.pystep` whose typed signature is the single schema authority, so the same
+function backs both the `fitstoolz` command line and a shinobi `Recipe` step (or a dosho
+tool) — the pattern simms 3.0 already uses.
+
+### Breaking
+
+- **`scabha` is no longer a dependency**; `stimela-ninja>=0.1.0b3`, `pydantic>=2.6` and
+  `click>=8.1` are. `omegaconf` is gone with it.
+- **The YAML parameter schemas are gone.** `src/fitstoolz/apps/parser_configs/` and
+  `fitstoolz.apps.get_app_config` have been removed. Parameters are declared as pydantic
+  `Field`s on each app's pystep, and the click options are generated from that model by
+  `shinobi.clickutil.build_options`.
+- **`fitstoolz.apps.<app>.runit` is a plain function taking an options namespace**, not a
+  `click.Command`. Each app module now exposes `step` (the `StepRef`) and `command` (the
+  `click.Command`); `fitstoolz.apps.main.app_dict` points at the latter.
+- **Boolean options gained a `--no-` form** (`--replace/--no-replace`,
+  `--memmap/--no-memmap`, `--show/--no-show`), so a flag defaulting to true can now be
+  turned off — `slice --no-memmap` was previously unreachable.
+- **`stack --stacked-fits` is now required** and `stack` no longer accepts `--outfile`
+  or `--replace`; it writes to `--stacked-fits` and never honoured the other two.
+- **`stats` no longer accepts `--outfile` or `--replace`**, which it ignored; it writes
+  no files. It now returns `min`/`max`/`mean`/`std` as typed step outputs, computed in
+  one pass over the data whether or not `--show` is given.
+- **`--temporal-chunks` has been removed** from `slice`, `stack`, `unstack`, `add-axis`
+  and `remove-axis`. `FitsData.build_chunks` only ever accepted RA, Dec and spectral
+  chunking, so the option did nothing.
+- **`add-axis --ctype` and `--index` are now required**, and `--crpix`, `--crval`,
+  `--cdelt` and `--cunit` default to `0`, `0.0`, `1.0` and `""`. Omitting any of them
+  previously crashed inside `FitsData.add_axis`.
+- **`FitsData.fname` is a `pathlib.Path`**, not a `scabha.basetypes.File`. `File`'s
+  `.EXISTS` attribute is not available on it; use `.exists()`.
+
+### Added
+
+- Each app returns typed outputs (`FitsOutputs`, `StackOutputs`, `StatsOutputs`), so
+  apps can be chained in a shinobi `Recipe` — the output path of one step wires into the
+  next.
+- `fitstoolz.apps.<app>.step` is a uniform handle on each app's `StepRef`, for callers
+  that resolve an app by name rather than by import.
+
 ## [0.1.0b3] — 2026-07-10
 
 First release since the package was restructured around `FitsData`. It corrects the
