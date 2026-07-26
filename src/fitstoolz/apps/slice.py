@@ -1,19 +1,18 @@
-import click
-from omegaconf import OmegaConf
-from scabha.schema_utils import clickify_parameters
+from __future__ import annotations
 
+from types import SimpleNamespace
+
+import shinobi
+from pydantic import Field
+
+from fitstoolz.apps import FitsOutputs, outfits_name
+from fitstoolz.apps._cli import make_command
 from fitstoolz.reader import FitsData
-
-from . import get_app_config, outfits_name
 
 app = "slice"
 
 
-@click.command(app)
-@clickify_parameters(get_app_config(app))
-def runit(**kwargs):
-    opts = OmegaConf.create(kwargs)
-
+def runit(opts):
     outfits = outfits_name(opts.fname, opts.outfile, replace=opts.replace, raise_exception=True)
 
     with FitsData(fname=opts.fname, memmap=opts.memmap) as myfits:
@@ -34,3 +33,29 @@ def runit(**kwargs):
             ra_chunks=opts.ra_chunks, dec_chunks=opts.dec_chunks, spectral_chunks=opts.spectral_chunks
         )
         myfits.write_to_fits(outfits, coord_names=coord_names, data_slice=slc, chunks=chunks)
+
+    return outfits
+
+
+@shinobi.pystep(name=app, info="Slice a FITS image along one or more axes")
+def slice_(
+    fname: str = Field(..., description="Input file(s)"),
+    axis: list[str] | None = Field(None, description="Axis slicing info, as CTYPE,START,END"),
+    memmap: bool = Field(True, description="memmap option to pass to astropy.io.fits.open()"),
+    ra_chunks: int | None = Field(None, description="RA chunking"),
+    dec_chunks: int | None = Field(None, description="Dec chunking"),
+    spectral_chunks: int | None = Field(None, description="Spectral chunking"),
+    outfile: str | None = Field(None, description="Path of output image"),
+    replace: bool = Field(False, description="Overwrite output if it exists"),
+    log_level: str = Field("INFO", description="Log level"),
+) -> FitsOutputs:
+    opts = SimpleNamespace(**locals())
+    return FitsOutputs(outfile=runit(opts))
+
+
+#: Uniform handle for this module's pystep, so the StepRef can be looked up
+#: generically (by the CLI group, tests, or a downstream shinobi/dosho caller)
+#: without knowing the function's own name.
+step = slice_
+
+command = make_command(slice_, positional="fname")

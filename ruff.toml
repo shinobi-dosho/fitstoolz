@@ -3,7 +3,26 @@ line-length = 120
 target-version = "py312"
 
 [lint]
-extend-select = [
-    "E501",  # Line length
-    "I"      # isort - sort imports
+# `select`, not `extend-select`. This list is the repo's *whole* ruleset,
+# stated outright rather than inherited from whatever ruff happens to enable
+# this month.
+#
+# It used to be `extend-select = ["E501", "I"]`, i.e. "ruff's default, plus
+# these" -- and ruff 0.16.0 widened that default. CI installs the tests group
+# fresh on every run (`pip install --group tests`, and the group only asks for
+# `ruff>=0.12.9`), so it picked the change up immediately: 25 findings on an
+# untouched `main`, turning the next PR red with nothing in it to blame. The
+# set below is what this repo has actually been enforcing all along -- ruff's
+# historical default (E4/E7/E9/F) plus the two rules that were named here.
+#
+# Adopting a broader ruleset is a fine thing to decide -- but it should be
+# decided, not inherited from a dependency bump. Add rules here deliberately.
+# (dosho and caracal2 carry this same fix, for the same reason.)
+select = [
+    "E4",    # pycodestyle: imports
+    "E7",    # pycodestyle: statements
+    "E9",    # pycodestyle: runtime/syntax errors
+    "F",     # pyflakes
+    "E501",  # line length
+    "I",     # isort - sort imports
 ]

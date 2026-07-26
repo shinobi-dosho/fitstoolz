@@ -1,3 +1,4 @@
+from pathlib import Path
 from typing import Any, Dict, List
 
 import dask.array as da
@@ -8,15 +9,14 @@ from astropy.coordinates import SpectralCoord
 from astropy.io import fits
 from astropy.table import Table
 from astropy.wcs import WCS
-from scabha.basetypes import File
 
 from fitstoolz.utils import get_beam_table
 
 
 class FitsData:
     def __init__(self, fname: str, memmap: bool = True):
-        self.fname = File(fname)
-        if not self.fname.EXISTS:
+        self.fname = Path(fname)
+        if not self.fname.exists():
             raise FileNotFoundError(f"Input FITS file '{fname}' does not exist")
 
         self.hdulist = fits.open(self.fname, memmap=memmap)
@@ -340,7 +340,7 @@ class FitsData:
             for chan in range(nbeams):
                 self.beam_table.add_row(beams[chan])
 
-    def expand_along_axis_from_files(self, name, files: List[File]):
+    def expand_along_axis_from_files(self, name, files: List[Path]):
         idx = self.coord_index(name)
         for fname in files:
             with fits.open(fname, memmap=True) as hdul:
@@ -447,12 +447,12 @@ class FitsData:
         return chunks
 
     def write_to_fits(
-        self, fname: File, coord_names: list[str] = None, data_slice: List[Any] = None, chunks: Dict = None
+        self, fname: Path, coord_names: list[str] = None, data_slice: List[Any] = None, chunks: Dict = None
     ):
         """Write FitsData object into a FITS file
 
         Args:
-            fname (File): Name of FITS image to write
+            fname (Path): Name of FITS image to write
             coord_names (list[str]): Coordinates to include in the FITS image. The ordering is the Python convention.
                     For example, to get a FITS image with RA -> NAXIS1, DEC -> NAXIS2, FREQ -> NAXIS3, STOKES -> NAXIS4,
                     you need to give coord_names=['STOKES', 'FREQ', 'DEC', 'RA'].

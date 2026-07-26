@@ -1,10 +1,10 @@
+from pathlib import Path
 from typing import List
 
 from astropy import units
 from astropy.io import fits
 from astropy.table import Table
 from astropy.wcs import WCS
-from scabha.basetypes import File
 
 
 def reorder_wcs(wcs, old_order: List[str], new_order: List[str]) -> WCS:
@@ -48,9 +48,9 @@ def beam_unit(header) -> units.Unit:
     return units.deg
 
 
-def get_beam_table(fname: File):
-    fname = File(fname)
-    if not fname.EXISTS:
+def get_beam_table(fname: Path):
+    fname = Path(fname)
+    if not fname.exists():
         raise FileNotFoundError(f"Input FITS file '{fname}' does not exist")
 
     beam_info = {

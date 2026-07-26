@@ -1,17 +1,13 @@
-import os.path
+from __future__ import annotations
 
-from scabha.basetypes import File
-from scabha.schema_utils import paramfile_loader
-
-thisdir = os.path.dirname(__file__)
-config_dir = os.path.join(thisdir, "parser_configs")
-
-sources = [File(os.path.join(config_dir, "base.yaml"))]
+from pydantic import BaseModel
 
 
-def get_app_config(app):
-    parserfile = File(f"{config_dir}/{app}.yaml")
-    return paramfile_loader(parserfile, sources, use_cache=False)[app]
+class FitsOutputs(BaseModel):
+    """Path of the FITS file an app wrote, so it can be wired into a shinobi
+    Recipe (or consumed as a dosho tool) as the input of a following step."""
+
+    outfile: str | None = None
 
 
 def outfits_name(infile, outfile, replace=False, raise_exception=False):
