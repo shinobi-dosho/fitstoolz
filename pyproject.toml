@@ -30,7 +30,7 @@ dependencies = [
     # 8.x API is stable.
     "click>=8.3.3",
     "pydantic>=2.6",
-    "stimela-ninja>=0.1.0b3",
+    "stimela-ninja>=0.1.0b4",
 ]
 
 [build-system]
