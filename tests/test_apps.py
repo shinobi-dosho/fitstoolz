@@ -176,7 +176,7 @@ def test_app_inputs_models():
     for app_name, import_path in main_group.app_dict.items():
         modname = import_path.rsplit(".", 1)[0]
         mod = importlib.import_module(modname)
-        step = getattr(mod, "step")
+        step = mod.step
         assert step.step.name == app_name
         fields = step.step.inputs_model.model_fields
         assert fields["fname"].is_required()
