@@ -1,0 +1,82 @@
+name: CI
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: Python ${{ matrix.python-version }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.11", "3.12", "3.13"]
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - name: Install Python ${{ matrix.python-version }}
+        run: uv python install ${{ matrix.python-version }}
+
+      # --locked everywhere: install the versions committed in uv.lock and fail
+      # if the lock does not match pyproject.toml. Without it, a green run only
+      # means the tree passed against whatever PyPI happened to publish that
+      # morning -- a red one tomorrow could be this repo's fault or a
+      # dependency's, and the log cannot tell you which. That distinction
+      # matters here specifically because the FITS and WCS parsing is astropy's
+      # (see SECURITY.md), so "which astropy" is a real variable.
+      # `docs` is in scope as well as `src tests`, because .githooks/pre-commit
+      # lints whatever Python is staged. If CI checked less, a contributor would
+      # get hook failures CI never reproduces -- and docs/conf.py would drift
+      # unlinted, which is how it acquired a DTZ011 in the first place.
+      - name: Lint (ruff)
+        run: uv run --python ${{ matrix.python-version }} --locked --group tests ruff check src tests docs
+
+      - name: Check formatting (ruff)
+        run: uv run --python ${{ matrix.python-version }} --locked --group tests ruff format --check --diff src tests docs
+
+      - name: Run tests
+        run: uv run --python ${{ matrix.python-version }} --locked --group tests pytest -q --cov=fitstoolz --cov-report=term-missing
+
+  audit:
+    name: Dependency audit
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      # Runtime dependencies only, straight off uv.lock (--frozen), so the
+      # versions audited here are the versions the test jobs installed and the
+      # versions in the diff under review. The exported file is echoed to the
+      # log, which is the record of what was actually checked.
+      #
+      # Same two commands as `.githooks/pre-commit`, so a clean commit and a
+      # green job mean the same thing.
+      - name: Export locked dependencies
+        run: |
+          uv export --frozen --no-emit-project --no-default-groups --no-hashes \
+            --format requirements-txt -o requirements-audit.txt
+          cat requirements-audit.txt
+
+      - name: pip-audit
+        run: uv run --locked --group audit pip-audit --no-deps --requirement requirements-audit.txt

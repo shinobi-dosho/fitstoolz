@@ -30,7 +30,7 @@ def runit(opts):
         )
         myfits.write_to_fits(outfits, chunks=chunks)
 
-    log.info(f"Finished. File written to: {outfits}")
+    log.info("Finished. File written to: %s", outfits)
 
     return outfits
 

@@ -1,6 +1,7 @@
 import os.path
 import shutil
 import tempfile
+import warnings
 
 import numpy as np
 from astropy.io import fits
@@ -75,9 +76,11 @@ class InitTest:
                     try:
                         os.remove(path)
                     except OSError as e:
-                        print(f"Error deleting file '{path}': {e}")
+                        # A failed cleanup leaks a temp file but must not fail
+                        # the run; warn so pytest surfaces it in the summary.
+                        warnings.warn(f"Error deleting file '{path}': {e}", stacklevel=2)
                 elif os.path.isdir(path):
                     try:
                         shutil.rmtree(path)
                     except OSError as e:
-                        print(f"Error deleting directory '{path}': {e}")
+                        warnings.warn(f"Error deleting directory '{path}': {e}", stacklevel=2)

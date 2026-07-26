@@ -31,7 +31,7 @@ def runit(opts):
         )
         myfits.write_to_fits(opts.stacked_fits, chunks=chunks)
 
-    log.info(f"Wrote stacked file to: {opts.stacked_fits}")
+    log.info("Wrote stacked file to: %s", opts.stacked_fits)
 
     return opts.stacked_fits
 

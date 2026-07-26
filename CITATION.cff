@@ -1,0 +1,29 @@
+cff-version: 1.2.0
+message: "If you use this software, please cite it using these metadata."
+title: "fitstoolz"
+abstract: >-
+  Python libraries and command-line tools for interfacing with FITS data in an
+  intuitive way -- consistent image and coordinate indexing, named axes, and
+  xarray/dask support.
+type: software
+authors:
+  - family-names: "Makhathini"
+    given-names: "Sphesihle"
+    email: "sphemakh@gmail.com"
+    orcid: "https://orcid.org/0000-0001-9565-9622"
+  - family-names: "Naidoo"
+    given-names: "Mika"
+    email: "mika.naidoo25@gmail.com"
+  - family-names: "Ramaila"
+    given-names: "Athanaseus"
+    email: "armaila@sarao.ac.za"
+version: "0.1.0b4"
+license: MIT
+repository-code: "https://github.com/shinobi-dosho/fitstoolz"
+url: "https://fitstoolz.readthedocs.io"
+keywords:
+  - radio astronomy
+  - FITS
+  - astronomy
+  - xarray
+  - dask

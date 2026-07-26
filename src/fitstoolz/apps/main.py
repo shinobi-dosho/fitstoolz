@@ -3,7 +3,7 @@ import click
 from .lazy_group import LazyClickGroup
 
 applist = "remove_axis add_axis unstack stack slice stats header".split()
-app_dict = dict([(name.replace("_", "-"), f"fitstoolz.apps.{name}.command") for name in applist])
+app_dict = {name.replace("_", "-"): f"fitstoolz.apps.{name}.command" for name in applist}
 
 
 @click.group(cls=LazyClickGroup, lazy_subcommands=app_dict, no_args_is_help=True)
