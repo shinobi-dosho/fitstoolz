@@ -101,10 +101,15 @@ def to_unit(value, from_unit, to_unit_):
 
 
 class FitsData:
-    def __init__(self, fname: str, memmap: bool = True):
+    def __init__(self, fname: str, memmap: bool = True, hdu: int = 0):
         self.fname = Path(fname)
         self.hdulist = open_fits(self.fname, memmap=memmap)
-        self.phdu = self.hdulist[0]
+        # Which HDU carries the image. Everything downstream reads through
+        # `phdu` or `hdu_index`, so a file whose cube is not the primary HDU
+        # -- an MEF, or one with a compressed image in an extension -- is
+        # addressed the same way as one where it is.
+        self.hdu_index = hdu
+        self.phdu = self.hdulist[hdu]
         self.header = self.phdu.header
         self.wcs = WCS(self.header)
         self.dim_info = self.wcs.get_axis_types()[::-1]
@@ -112,7 +117,7 @@ class FitsData:
         self.coords = xr.Coordinates()
         self.open_arrays = []
         self.spectral_coord = None
-        self.data = lazy_data(self.fname, self.phdu)  # FitsData reads the primary HDU
+        self.data = lazy_data(self.fname, self.phdu, hdu_index=hdu)
         self.data_units = self.header.get("BUNIT", "Jy").strip()
 
         # astropy drops trailing axes with no NAXISn from array_shape, so an
@@ -459,21 +464,27 @@ class FitsData:
             self.beam_table.add_row(row)
 
     def expand_along_axis_from_files(self, name, files: List[Path]):
+        """Stack further files onto this one along ``name``.
+
+        Each file is read at the same HDU index this ``FitsData`` was opened at,
+        on the grounds that a stack of like files is like all the way down.
+        """
         idx = self.coord_index(name)
         for fname in files:
             with open_fits(fname, memmap=True) as hdul:
+                hdu = hdul[self.hdu_index]
                 # `shape`, not `data.ndim`: the point of the lazy read below is
                 # not to touch the array, and `.data` on a scaled image would.
-                data = lazy_data(fname, hdul[0])
-                if self.ndim != len(hdul[0].shape):
+                data = lazy_data(fname, hdu, hdu_index=self.hdu_index)
+                if self.ndim != len(hdu.shape):
                     slc = [slice(None)] * self.ndim
                     slc[idx] = da.newaxis
                     data = data[tuple(slc)]
-                beam_table = get_beam_table(fname)
+                beam_table = get_beam_table(fname, hdu=self.hdu_index)
             self.expand_along_axis(name, data, beam_table)
 
     def __register_beam_table(self):
-        beam_table = get_beam_table(self.fname)
+        beam_table = get_beam_table(self.fname, hdu=self.hdu_index)
         if beam_table is False:
             self.beam_table = None
             self.beam_table_extname = None
@@ -775,6 +786,14 @@ class FitsData:
 
         header = fits.Header(self.header)
         header["NAXIS"] = out_ndim
+
+        # The output is always a primary HDU, so the input's extension identity
+        # must not ride along on it -- EXTNAME and friends are defined for
+        # extensions. astropy drops XTENSION/PCOUNT/GCOUNT itself when it builds
+        # the PrimaryHDU, but not these, so a cube read from an extension came
+        # back out as a primary HDU still claiming to be called 'SCI'.
+        for keyword in ("EXTNAME", "EXTVER", "EXTLEVEL"):
+            header.pop(keyword, None)
         # Remove stale keywords from dimensions beyond out_ndim
         for n_extra in range(out_ndim + 1, self.ndim + 1):
             for key in ("NAXIS", "CTYPE", "CRPIX", "CRVAL", "CDELT", "CUNIT"):

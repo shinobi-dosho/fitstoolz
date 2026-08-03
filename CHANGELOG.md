@@ -8,6 +8,27 @@ major version is zero, a minor bump may carry breaking changes.
 
 ## [Unreleased]
 
+## [0.2.1] — 2026-08-03
+
+### Added
+
+- **`FitsData(fname, hdu=0)`** — read the image from an extension rather than the primary
+  HDU. `read_block` and `lazy_data` already took an HDU index; only the constructor
+  hardcoded `hdulist[0]`, so a multi-extension file, or one with the cube in an `IMAGE`
+  extension, could not be opened at all. The index is kept as `hdu_index` and used for
+  every subsequent read: the lazy blocks carry it, `get_data` reads through it,
+  `get_beam_table` takes the `BMAJ`/`BMIN`/`BPA` fallback off *that* HDU's header rather
+  than the primary's, and `expand_along_axis_from_files` reads the same index from each
+  file it stacks.
+
+### Fixed
+
+- **A cube read from an extension is no longer written back out claiming to be one.**
+  `write_to_fits` copies the input header, and astropy drops `XTENSION`/`PCOUNT`/`GCOUNT`
+  when it builds the `PrimaryHDU` but not `EXTNAME`, so the output was a primary HDU
+  still carrying the extension's name. `EXTNAME`, `EXTVER` and `EXTLEVEL` are now dropped
+  on the way out, since they are defined for extensions.
+
 ## [0.2.0] — 2026-08-03
 
 Seven defects, most of them silent, found by auditing the package as the FITS I/O layer

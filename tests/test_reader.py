@@ -505,6 +505,84 @@ def test_stacked_beams_reach_the_output(config):
     assert len(FitsData(out).beam_table) == 4
 
 
+# --------------------------------------------------------------------------- hdu selection
+
+
+def write_mef(config, npix=8, nchan=4, data=None, beams=None):
+    """A file whose image lives in an extension, not the primary HDU."""
+    if data is None:
+        data = np.random.default_rng(9).normal(size=(nchan, npix, npix)).astype(np.float32)
+    header = make_header(npix, nchan)
+    header["BUNIT"] = "Jy/beam"
+    hdus = [fits.PrimaryHDU(), fits.ImageHDU(data, header=header, name="SCI")]
+    if beams is not None:
+        hdus.append(beams)
+    path = config.random_named_file(suffix=".fits")
+    fits.HDUList(hdus).writeto(path, overwrite=True)
+    return path, data
+
+
+def test_hdu_selects_which_extension_carries_the_image(config):
+    path, data = write_mef(config, npix=8, nchan=4)
+
+    fds = FitsData(path, hdu=1)
+
+    assert fds.hdu_index == 1
+    assert fds.dshape == (4, 8, 8)
+    assert fds.coord_names == ["FREQ", "DEC", "RA"]
+    np.testing.assert_allclose(np.asarray(fds.data), data, rtol=1e-6)
+
+
+def test_hdu_defaults_to_the_primary(config):
+    fds = FitsData(write_fits(config, npix=8, nchan=2))
+    assert fds.hdu_index == 0
+
+
+@pytest.mark.filterwarnings("ignore::astropy.wcs.FITSFixedWarning")
+def test_the_wrong_hdu_is_reported_not_guessed(config):
+    """HDU 0 of an MEF carries no image; say so rather than limping on."""
+    path, _ = write_mef(config)
+    with pytest.raises(RuntimeError, match="does not match Image data"):
+        FitsData(path)
+
+
+def test_blocks_of_an_extension_read_from_that_extension(config):
+    """The lazy graph has to carry the HDU index, not just the filename."""
+    path, data = write_mef(config, npix=16, nchan=8)
+
+    with dask.config.set({"array.chunk-size": "1kiB"}):
+        fds = FitsData(path, hdu=1)
+        assert fds.data.numblocks[0] > 1
+        np.testing.assert_allclose(np.asarray(fds.data.blocks[2, 0, 0]), data[2:3], rtol=1e-6)
+
+
+def test_beam_keywords_are_read_from_the_selected_hdu(config):
+    """BMAJ lives on the image's own header, which is not HDU 0 here."""
+    path, _ = write_mef(config, npix=8, nchan=1)
+    with fits.open(path, mode="update") as hdulist:
+        hdulist[1].header["BMAJ"] = 2e-3
+        hdulist[1].header["BMIN"] = 1e-3
+        hdulist[1].header["BPA"] = 20.0
+
+    fds = FitsData(path, hdu=1)
+
+    assert fds.beam_table is not None
+    np.testing.assert_allclose(np.asarray(fds.beam_table["BMAJ"]), [2e-3])
+    assert fds.beam_table_extname is None, "header keywords are not an extension"
+
+
+def test_writing_an_extension_out_lands_in_a_primary_hdu(config):
+    path, data = write_mef(config, npix=8, nchan=4)
+    fds = FitsData(path, hdu=1)
+
+    out = config.random_named_file(suffix=".fits")
+    fds.write_to_fits(out, overwrite=True)
+
+    with fits.open(out) as hdulist:
+        assert [hdu.name for hdu in hdulist] == ["PRIMARY"]
+    np.testing.assert_allclose(np.asarray(FitsData(out).data), data, rtol=1e-6)
+
+
 # --------------------------------------------------------------------------- stacking
 
 
