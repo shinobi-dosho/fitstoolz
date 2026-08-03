@@ -1,6 +1,6 @@
 [project]
 name = "fitstoolz"
-version = "0.1.0"
+version = "0.1.1"
 description = "Python libraries for interfacing with FITS data in an intuitive way"
 authors = [
     {name="Sphesihle Makhathini", email="sphemakh@gmail.com"},
