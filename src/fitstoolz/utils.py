@@ -121,7 +121,18 @@ def beam_unit(header) -> units.Unit:
     return units.deg
 
 
-def get_beam_table(fname: Path):
+def get_beam_table(fname: Path, hdu: int = 0):
+    """Beam information for an image, from a beam extension or the header.
+
+    Args:
+        fname (Path): FITS file to read.
+        hdu (int): Index of the image HDU whose header carries the
+            ``BMAJ``/``BMIN``/``BPA`` fallback. A beam *extension* is looked for
+            across the whole file regardless, since it is an HDU of its own.
+
+    Returns:
+        astropy.table.Table|bool: The beams, or False if the file records none.
+    """
     fname = Path(fname)
 
     beam_info = {
@@ -135,7 +146,7 @@ def get_beam_table(fname: Path):
     beam_table = None
     # accept the first beam table in hdulist
     with open_fits(fname) as hdulist:
-        header = hdulist[0].header
+        header = hdulist[hdu].header
         for hdu in hdulist:
             if isinstance(hdu, fits.BinTableHDU):
                 tab = Table.read(hdu)
