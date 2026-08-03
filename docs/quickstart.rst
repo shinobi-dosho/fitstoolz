@@ -83,10 +83,16 @@ assignment — the list above produces ``RA`` as ``NAXIS1`` and ``STOKES`` as
 ``NAXIS4``. Headers are rebuilt from the coordinates, so stale keywords from
 dropped axes do not survive.
 
-.. warning::
+``write_to_fits`` will not replace an existing file unless you say so:
 
-   Writes pass ``overwrite=True``. A path you hand to ``write_to_fits`` is a
-   path it will clobber, without prompting. See :doc:`security`.
+.. code-block:: python
+
+    myfits.write_to_fits("out.fits")                   # raises if out.fits exists
+    myfits.write_to_fits("out.fits", overwrite=True)   # replaces it
+
+The write lands through a temporary file in the same directory and is renamed
+into place, so writing back over the file you opened is safe, and a write that
+fails part way leaves the previous contents alone. See :doc:`security`.
 
 From the command line
 ---------------------

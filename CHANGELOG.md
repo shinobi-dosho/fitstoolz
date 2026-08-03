@@ -40,6 +40,40 @@ tool) — the pattern simms 3.0 already uses.
   previously crashed inside `FitsData.add_axis`.
 - **`FitsData.fname` is a `pathlib.Path`**, not a `scabha.basetypes.File`. `File`'s
   `.EXISTS` attribute is not available on it; use `.exists()`.
+- **`FitsData.write_to_fits` no longer overwrites by default.** It took no `overwrite`
+  argument and passed `overwrite=True` to astropy unconditionally, so a library caller
+  had no way to offer its own users a `--no-overwrite` — the flag would be accepted and
+  then quietly disregarded. It now takes `overwrite=False` and raises `FileExistsError`
+  on an existing destination. The apps pass `overwrite=True`, so **the command line
+  behaves exactly as before**; only direct callers of the method see the change.
+
+### Fixed
+
+- **`FitsData` no longer reads the whole cube into memory when you open a file.** The
+  data was built with `da.asarray(hdu.data)`, which materialises: constructing a
+  `FitsData` cost one full in-RAM copy of the array, whatever it was chunked to
+  afterwards. On a 415 MB cube that was +405 MB of *anonymous* resident memory before a
+  single block had been asked for, which capped the package at cubes that fit in RAM —
+  and contradicted the "data stays lazy" contract in `AGENTS.md`.
+
+  Blocks are now read on demand through `HDU.section` by `reader.read_block`, one file
+  handle per read. Opening the same cube costs +0 MB, the graph stays about 1.5 KB
+  instead of 415 MB, and a full-cube reduction streams. Note that `da.from_array` is
+  *not* the fix — handed a memmap, dask materialises that too, `name=False` included.
+
+  Two consequences worth knowing. Reads are chunked for the file's own layout by the new
+  `utils.contiguous_chunks` (slowest-varying axes split, trailing axes kept whole, sized
+  by dask's `array.chunk-size`); rechunk through `get_xds` if you want RA blocks. And a
+  graph now carries its own filename, so it can be computed after the `FitsData` that
+  produced it has been closed.
+
+- **Writing over the file you opened is safe.** With the data read lazily, writing
+  straight to the destination would truncate the file the outstanding blocks were still
+  reading from — which is exactly what the apps' `--replace` asks for. `write_to_fits`
+  now writes to a `.<name>.fitstoolz-tmp` sibling and renames it into place. The
+  replacement is therefore atomic: a write that dies part way leaves the previous file
+  intact instead of a truncated one. The destination directory briefly needs room for
+  both copies.
 
 ### Added
 

@@ -69,6 +69,22 @@ the four outputs cost one pass rather than four.
 `memmap=True` is the default on the way in. Don't materialise a cube to work out
 its shape or dtype; the header already knows.
 
+That rule binds the reader itself, and it is easy to break by accident.
+`FitsData.data` is built by `map_blocks` over `reader.read_block`, which opens
+the file and reads *its own slice* through `HDU.section` when the block is
+computed. It is not `da.asarray(hdu.data)` — that reads the whole cube at
+construction whatever it is chunked to afterwards, which caps the package at
+cubes that fit in RAM. Nor is it `da.from_array(hdu.data)`: handed a memmap,
+dask materialises that too, `name=False` included. `tests/test_reader.py`
+guards this by asserting the serialised graph stays a few kilobytes as the cube
+grows, which is what fails if the data ends up embedded in it.
+
+Chunking comes from `utils.contiguous_chunks`, which splits the *slowest*-varying
+axes and keeps the trailing ones whole, because FITS stores `NAXIS1` fastest and
+that is the axis order a contiguous read follows. Callers who want a different
+shape — RA blocks, say — rechunk through `get_xds`; the reader does not try to
+guess the access pattern.
+
 ## Apps: one module, one pystep, four names
 
 Every module in `src/fitstoolz/apps/` follows the same shape, and the CLI relies
