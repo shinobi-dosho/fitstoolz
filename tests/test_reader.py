@@ -2,6 +2,7 @@
 axis manipulation, beam handling and the xarray/FITS round trip.
 """
 
+import logging
 import pickle
 from pathlib import Path
 
@@ -502,6 +503,129 @@ def test_stacked_beams_reach_the_output(config):
     out = config.random_named_file(suffix=".fits")
     fds.write_to_fits(out, overwrite=True)
     assert len(FitsData(out).beam_table) == 4
+
+
+# --------------------------------------------------------------------------- stacking
+
+
+def test_expand_from_files_does_not_read_the_extra_file(config):
+    """The extra files were pulled into memory whole by `da.asarray`."""
+    first = write_fits(config, npix=64, nchan=32)
+    second = write_fits(config, npix=64, nchan=32)
+
+    fds = FitsData(first)
+    fds.expand_along_axis_from_files("FREQ", [second])
+
+    assert fds.dshape == (64, 64, 64)
+    graph = len(pickle.dumps(dict(fds.data.dask)))
+    assert graph < 8192, f"graph is {graph} bytes -- the extra file looks embedded in it"
+
+
+def test_expand_from_files_continues_the_grid_in_world_units(config):
+    """`pixel_size` is CDELT, in header units; the grid is in astropy's.
+
+    On a cube whose CUNIT is not already SI the two differ by that factor, and
+    stepping by the wrong one piles the appended channels on top of each other
+    instead of continuing the band.
+    """
+    first = write_fits(config, npix=4, nchan=4, cunit3="MHz", cdelt3=1.0, crval3=1400.0)
+    second = write_fits(config, npix=4, nchan=4, cunit3="MHz", cdelt3=1.0, crval3=1404.0)
+
+    fds = FitsData(first)
+    fds.expand_along_axis_from_files("FREQ", [second])
+
+    grid = np.squeeze(np.asarray(fds.coords["FREQ"].data))
+    np.testing.assert_allclose(grid, 1.4e9 + np.arange(8) * 1e6, rtol=1e-12)
+
+
+def test_expand_keeps_the_grid_and_the_data_the_same_length(config):
+    """`arange(start, stop, step)` takes its length from the endpoints.
+
+    That is only reliable when `step` is exactly the grid's own spacing, and
+    CDELT was not: it is a header value in header units, while the grid comes
+    back off the WCS. Feed the one to the other and the count can come out one
+    too many, leaving the coordinate grid and the data disagreeing about how
+    many channels there are. Counting the values out instead removes the
+    question rather than narrowing it.
+    """
+    # 1e6/3 over five channels is one such combination -- six coordinates for
+    # the five channels being appended.
+    fiddly = 1e6 / 3
+    first = write_fits(config, npix=4, nchan=5, cdelt3=fiddly)
+    second = write_fits(config, npix=4, nchan=5, cdelt3=fiddly)
+
+    fds = FitsData(first)
+    fds.expand_along_axis_from_files("FREQ", [second])
+
+    grid = np.squeeze(np.asarray(fds.coords["FREQ"].data))
+    assert grid.size == fds.dshape[0] == 10
+    np.testing.assert_allclose(grid, 1.4e9 + np.arange(10) * fiddly, rtol=1e-9)
+
+
+def test_expand_drops_the_beam_table_when_a_file_lacks_one(config, caplog):
+    """A short table would now be written out as though it described the cube."""
+    first = write_fits(config, npix=4, nchan=4, extra_hdus=(beam_hdu(4),))
+    second = write_fits(config, npix=4, nchan=4)
+
+    fds = FitsData(first)
+    with caplog.at_level(logging.WARNING, logger="fitstoolz.reader"):
+        fds.expand_along_axis_from_files("FREQ", [second])
+
+    assert fds.beam_table is None
+    assert fds.beam_table_extname is None
+    assert "Dropping the beam table" in caplog.text
+
+    out = config.random_named_file(suffix=".fits")
+    fds.write_to_fits(out, overwrite=True)
+    with fits.open(out) as hdulist:
+        assert [hdu.name for hdu in hdulist] == ["PRIMARY"]
+
+
+def test_expand_onto_a_cube_without_beams_does_not_crash(config):
+    """Used to be an AttributeError: None has no add_row."""
+    first = write_fits(config, npix=4, nchan=4)
+    second = write_fits(config, npix=4, nchan=4, extra_hdus=(beam_hdu(4),))
+
+    fds = FitsData(first)
+    fds.expand_along_axis_from_files("FREQ", [second])
+
+    assert fds.dshape[0] == 8
+    assert fds.beam_table is None
+
+
+# --------------------------------------------------------------------------- header units
+
+
+def test_write_preserves_a_non_si_spectral_unit(config):
+    """CUNIT was taken off the grid while CDELT was taken off the header.
+
+    That described a cube in MHz as one in Hz and left CDELT at its MHz value --
+    a channel width a million times too narrow, and no round trip.
+    """
+    path = write_fits(config, npix=4, nchan=4, cunit3="MHz", cdelt3=1.0, crval3=1400.0)
+    fds = FitsData(path)
+
+    out = config.random_named_file(suffix=".fits")
+    fds.write_to_fits(out, overwrite=True)
+
+    header = fits.getheader(out)
+    assert header["CUNIT3"] == "MHz"
+    np.testing.assert_allclose(header["CRVAL3"], 1400.0, rtol=1e-12)
+    np.testing.assert_allclose(header["CDELT3"], 1.0, rtol=1e-12)
+
+    np.testing.assert_allclose(
+        np.squeeze(np.asarray(FitsData(out).coords["FREQ"].data)),
+        np.squeeze(np.asarray(fds.coords["FREQ"].data)),
+        rtol=1e-12,
+    )
+
+
+def test_to_unit_converts_or_passes_through():
+    assert reader.to_unit(1.0, "MHz", "Hz") == 1e6
+    assert reader.to_unit(3.0, "Hz", "Hz") == 3.0
+    assert reader.to_unit(3.0, "", "Hz") == 3.0, "a unitless axis is ordinary, not an error"
+    assert reader.to_unit(3.0, "Hz", None) == 3.0
+    assert reader.to_unit(3.0, "Hz", "deg") == 3.0, "incompatible units pass through rather than raise"
 
 
 # --------------------------------------------------------------------------- regrid_axis
