@@ -8,6 +8,133 @@ major version is zero, a minor bump may carry breaking changes.
 
 ## [Unreleased]
 
+## [0.2.0] — 2026-08-03
+
+Seven defects, most of them silent, found by auditing the package as the FITS I/O layer
+for another project. Nearly all of this is bug fixes; the minor bump is for the single
+breaking change below.
+
+The headline is that **opening a file no longer reads it**. `FitsData` materialised the
+whole array on construction, which capped fitstoolz at data that fits in RAM whatever
+you chunked it to afterwards. The rest fall into two families: **beam tables were
+dropped by every write**, and **header units were mixed with world units** in three
+places, quietly corrupting any cube whose `CUNIT` was not already SI.
+
+Two things to know before upgrading. `FitsData.write_to_fits` no longer overwrites by
+default — the command line is unaffected, but direct callers of the method are. And
+outputs may now carry a `BEAMS` extension where before they carried none, because those
+beams were being thrown away.
+
+### Breaking
+
+- **`FitsData.write_to_fits` no longer overwrites by default.** It took no `overwrite`
+  argument and passed `overwrite=True` to astropy unconditionally, so a library caller
+  had no way to offer its own users a `--no-overwrite` — the flag would be accepted and
+  then quietly disregarded. It now takes `overwrite=False` and raises `FileExistsError`
+  on an existing destination. The apps pass `overwrite=True`, so **the command line
+  behaves exactly as before**; only direct callers of the method see the change.
+
+### Added
+
+- **`FitsData.regrid_axis(name, values, data, cunit=None)`** — put the array on a new
+  grid along one axis, changing its length. `coords` is an `xarray.Coordinates`, so
+  assigning a coordinate of a different length raised `AlignmentError`; there was no way
+  to write a cube on a resampled channel grid at all. It replaces the data and the grid
+  in one call, rewrites `NAXISn`/`CRVALn`/`CDELTn`/`CRPIXn`, and rebuilds every
+  coordinate from the new WCS. Uneven grids are rejected — a FITS axis is linear in
+  `CRVAL`/`CDELT` — and a per-channel beam table is interpolated onto the new grid.
+
+  `values` are in the axis' *header* units, which are not necessarily the units `coords`
+  reports back: astropy normalises a spectral coordinate to SI whatever `CUNIT` says.
+
+### Fixed
+
+- **`FitsData` no longer reads the whole cube into memory when you open a file.** The
+  data was built with `da.asarray(hdu.data)`, which materialises: constructing a
+  `FitsData` cost one full in-RAM copy of the array, whatever it was chunked to
+  afterwards. On a 415 MB cube that was +405 MB of *anonymous* resident memory before a
+  single block had been asked for, which capped the package at cubes that fit in RAM —
+  and contradicted the "data stays lazy" contract in `AGENTS.md`.
+
+  Blocks are now read on demand through `HDU.section` by `reader.read_block`, one file
+  handle per read. Opening the same cube costs +0 MB, the graph stays about 1.5 KB
+  instead of 415 MB, and a full-cube reduction streams. Note that `da.from_array` is
+  *not* the fix — handed a memmap, dask materialises that too, `name=False` included.
+
+  Two consequences worth knowing. Reads are chunked for the file's own layout by the new
+  `utils.contiguous_chunks` (slowest-varying axes split, trailing axes kept whole, sized
+  by dask's `array.chunk-size`); rechunk through `get_xds` if you want RA blocks. And a
+  graph now carries its own filename, so it can be computed after the `FitsData` that
+  produced it has been closed.
+
+- **`expand_along_axis_from_files` no longer reads each extra file into memory either.**
+  It built its arrays the same way, so `stack` materialised every input whole. Both call
+  sites now share one `reader.lazy_data` helper, rather than each having to be found
+  separately.
+
+- **A cube whose `CUNIT` is not already SI is no longer corrupted.** Header units
+  (`CRVAL`/`CDELT`/`CUNIT`, and `coords[...].pixel_size`) and world units (`coords`
+  values, `world_axis_units`) are two different systems — astropy reports a spectral
+  axis in SI whatever `CUNIT` says — and two places mixed them. Both were silent, and
+  both are invisible on a cube already in Hz:
+
+  - `write_to_fits` took `CUNIT` from the coordinate grid while `CDELT` came from the
+    header, so a cube in MHz was written as one in Hz *with its MHz channel width*: a
+    channel a million times too narrow, and no round trip through any of the apps.
+    `CUNIT` and `CDELT` now both come from the input header and `CRVAL` is converted into
+    that unit by the new `reader.to_unit`, so an MHz cube stays an MHz cube.
+  - `expand_along_axis` extended the grid by `pixel_size`, i.e. `CDELT` in header units,
+    so stacking two MHz cubes appended channels 1 Hz apart — the whole second file piled
+    on top of the end of the first. The step now comes from differencing the grid, which
+    is in the same system as the thing being extended.
+
+  `regrid_axis`, added above, reads both grids off `coords` for its beam interpolation
+  for exactly this reason. The rule is now written down in `AGENTS.md`.
+
+- **`expand_along_axis` no longer gains a channel to floating point.** The new
+  coordinates were built with `arange(start, stop, step)`, whose length is derived from
+  its endpoints — reliable only when `step` is exactly the grid's own spacing, which
+  `CDELT` was not, so the coordinate grid could come back longer than the data. The
+  values are counted out instead, which removes the question rather than narrowing it.
+
+- **Beam tables survive a write.** `FitsData` read a `BinTableHDU` of per-channel beams
+  into `beam_table` and then wrote a bare `PrimaryHDU`, so every output silently lost
+  them — including `stack`, which spends `expand_along_axis` accumulating the rows it
+  then dropped. A table that arrived as its own extension is written back to an extension
+  of the same name, with its rows cut to whatever `data_slice` selects and a `CHAN`
+  column renumbered against the output.
+
+  Beams that came from `BMAJ`/`BMIN`/`BPA` header keywords are deliberately *not*
+  promoted to a table: the header copy already carries them, and the single-beam
+  expansion over frequency in `__register_beam_table` is this package's model rather
+  than something the file recorded. `beam_table_extname` is the new attribute that
+  distinguishes the two.
+
+- **Stacking files with inconsistent beam tables no longer crashes or lies.** Appending
+  was unconditional: it raised `AttributeError` when the *first* file had no beams, and
+  silently produced a table shorter than the cube when a *later* one did not — which,
+  now that writes emit the table, would have been written out as though it described the
+  whole cube. A stack whose files disagree drops the table and logs a warning, since no
+  per-channel table honestly describes the result.
+
+- **Writing over the file you opened is safe, and replacement is atomic.** With the data
+  read lazily, writing straight to the destination would truncate the file the
+  outstanding blocks were still reading from — which is exactly what the apps'
+  `--replace` asks for. `write_to_fits` now writes to a `.<name>.fitstoolz-tmp` sibling
+  and renames it into place, so a write that dies part way leaves the previous file
+  intact instead of a truncated one. The destination directory briefly needs room for
+  both copies.
+
+### Documentation
+
+- `AGENTS.md` gains three sections that exist to stop these bugs recurring: the
+  `da.asarray`/`da.from_array` trap under "Data stays lazy", "Two unit systems, and the
+  line between them", and the beam provenance rule.
+- `SECURITY.md`, `docs/cli.rst` and `docs/quickstart.rst` no longer say that every write
+  passes `overwrite=True`, and the quickstart documents `regrid_axis`.
+
+## [0.1.0] — 2026-07-26
+
 The CLI is now built on shinobi (stimela-ninja, Stimela 3.0) instead of scabha. Each app
 is a `@shinobi.pystep` whose typed signature is the single schema authority, so the same
 function backs both the `fitstoolz` command line and a shinobi `Recipe` step (or a dosho
@@ -40,101 +167,8 @@ tool) — the pattern simms 3.0 already uses.
   previously crashed inside `FitsData.add_axis`.
 - **`FitsData.fname` is a `pathlib.Path`**, not a `scabha.basetypes.File`. `File`'s
   `.EXISTS` attribute is not available on it; use `.exists()`.
-- **`FitsData.write_to_fits` no longer overwrites by default.** It took no `overwrite`
-  argument and passed `overwrite=True` to astropy unconditionally, so a library caller
-  had no way to offer its own users a `--no-overwrite` — the flag would be accepted and
-  then quietly disregarded. It now takes `overwrite=False` and raises `FileExistsError`
-  on an existing destination. The apps pass `overwrite=True`, so **the command line
-  behaves exactly as before**; only direct callers of the method see the change.
-
-### Fixed
-
-- **A cube whose `CUNIT` is not already SI is no longer corrupted.** Header units
-  (`CRVAL`/`CDELT`/`CUNIT`, and `coords[...].pixel_size`) and world units (`coords`
-  values, `world_axis_units`) are two different systems — astropy reports a spectral
-  axis in SI whatever `CUNIT` says — and three places mixed them. All three were silent,
-  and all three are invisible on a cube already in Hz:
-
-  - `write_to_fits` took `CUNIT` from the coordinate grid while `CDELT` came from the
-    header, so a cube in MHz was written as one in Hz *with its MHz channel width*: a
-    channel a million times too narrow, and no round trip. `CUNIT` and `CDELT` now both
-    come from the input header and `CRVAL` is converted into that unit by the new
-    `reader.to_unit`, so an MHz cube stays an MHz cube.
-  - `expand_along_axis` extended the grid by `pixel_size`, i.e. `CDELT` in header units,
-    so stacking two MHz cubes appended channels 1 Hz apart — the whole second file piled
-    on top of the end of the first. The step now comes from the grid itself.
-  - `regrid_axis`'s beam interpolation was already fixed for this in the previous
-    release; the rule is now written down in `AGENTS.md`.
-
-- **`expand_along_axis` no longer loses or gains a channel to floating point.** The new
-  coordinates were built with `arange(start, stop, step)`, whose length is derived from
-  its endpoints — reliable only when `step` is exactly the grid's own spacing, which
-  `CDELT` was not. The values are counted out instead, which removes the question rather
-  than narrowing it.
-
-- **`expand_along_axis_from_files` no longer reads each extra file into memory.** It
-  built its arrays with `da.asarray(hdu.data)` — the same defect fixed in `FitsData`
-  last release, in a second place — so `stack` materialised every input whole. Both call
-  sites now share one `reader.lazy_data` helper.
-
-- **Stacking files with inconsistent beam tables no longer crashes or lies.** Appending
-  was unconditional: it raised `AttributeError` when the *first* file had no beams, and
-  silently produced a table shorter than the cube when a *later* one did not — which,
-  now that `write_to_fits` emits the table, would have been written out as though it
-  described the whole cube. A stack whose files disagree drops the table and logs a
-  warning, since no per-channel table honestly describes the result.
-
-- **`FitsData` no longer reads the whole cube into memory when you open a file.** The
-  data was built with `da.asarray(hdu.data)`, which materialises: constructing a
-  `FitsData` cost one full in-RAM copy of the array, whatever it was chunked to
-  afterwards. On a 415 MB cube that was +405 MB of *anonymous* resident memory before a
-  single block had been asked for, which capped the package at cubes that fit in RAM —
-  and contradicted the "data stays lazy" contract in `AGENTS.md`.
-
-  Blocks are now read on demand through `HDU.section` by `reader.read_block`, one file
-  handle per read. Opening the same cube costs +0 MB, the graph stays about 1.5 KB
-  instead of 415 MB, and a full-cube reduction streams. Note that `da.from_array` is
-  *not* the fix — handed a memmap, dask materialises that too, `name=False` included.
-
-  Two consequences worth knowing. Reads are chunked for the file's own layout by the new
-  `utils.contiguous_chunks` (slowest-varying axes split, trailing axes kept whole, sized
-  by dask's `array.chunk-size`); rechunk through `get_xds` if you want RA blocks. And a
-  graph now carries its own filename, so it can be computed after the `FitsData` that
-  produced it has been closed.
-
-- **Writing over the file you opened is safe.** With the data read lazily, writing
-  straight to the destination would truncate the file the outstanding blocks were still
-  reading from — which is exactly what the apps' `--replace` asks for. `write_to_fits`
-  now writes to a `.<name>.fitstoolz-tmp` sibling and renames it into place. The
-  replacement is therefore atomic: a write that dies part way leaves the previous file
-  intact instead of a truncated one. The destination directory briefly needs room for
-  both copies.
-
-- **Beam tables now survive a write.** `FitsData` read a `BinTableHDU` of per-channel
-  beams into `beam_table` and then wrote a bare `PrimaryHDU`, so every output silently
-  lost them — including `stack`, which spends `expand_along_axis` accumulating the rows
-  it then dropped. A table that arrived as its own extension is written back to an
-  extension of the same name, with its rows cut to whatever `data_slice` selects and a
-  `CHAN` column renumbered against the output.
-
-  Beams that came from `BMAJ`/`BMIN`/`BPA` header keywords are deliberately *not*
-  promoted to a table: the header copy already carries them, and the single-beam
-  expansion over frequency in `__register_beam_table` is this package's model rather
-  than something the file recorded. `beam_table_extname` is the new attribute that
-  distinguishes the two.
 
 ### Added
-
-- **`FitsData.regrid_axis(name, values, data, cunit=None)`** — put the array on a new
-  grid along one axis, changing its length. `coords` is an `xarray.Coordinates`, so
-  assigning a coordinate of a different length raised `AlignmentError`; there was no way
-  to write a cube on a resampled channel grid at all. It replaces the data and the grid
-  in one call, rewrites `NAXISn`/`CRVALn`/`CDELTn`/`CRPIXn`, and rebuilds every
-  coordinate from the new WCS. Uneven grids are rejected — a FITS axis is linear in
-  `CRVAL`/`CDELT` — and a per-channel beam table is interpolated onto the new grid.
-
-  `values` are in the axis' *header* units, which are not necessarily the units `coords`
-  reports back: astropy normalises a spectral coordinate to SI whatever `CUNIT` says.
 
 - Each app returns typed outputs (`FitsOutputs`, `StackOutputs`, `StatsOutputs`), so
   apps can be chained in a shinobi `Recipe` — the output path of one step wires into the
