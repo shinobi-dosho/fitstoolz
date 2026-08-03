@@ -140,6 +140,12 @@ def get_beam_table(fname: Path):
             if isinstance(hdu, fits.BinTableHDU):
                 tab = Table.read(hdu)
                 if {"BMAJ", "BMIN", "BPA"}.issubset(tab.colnames):
+                    # Record which extension it came from. This is the flag that
+                    # tells a writer the beams live in an HDU of their own rather
+                    # than in BMAJ/BMIN/BPA header keywords -- and so whether
+                    # writing an HDU back preserves the input or invents an
+                    # extension the input never had.
+                    tab.meta.setdefault("EXTNAME", hdu.name or "BEAMS")
                     beam_table = tab
                     break
 

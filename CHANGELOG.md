@@ -75,7 +75,31 @@ tool) — the pattern simms 3.0 already uses.
   intact instead of a truncated one. The destination directory briefly needs room for
   both copies.
 
+- **Beam tables now survive a write.** `FitsData` read a `BinTableHDU` of per-channel
+  beams into `beam_table` and then wrote a bare `PrimaryHDU`, so every output silently
+  lost them — including `stack`, which spends `expand_along_axis` accumulating the rows
+  it then dropped. A table that arrived as its own extension is written back to an
+  extension of the same name, with its rows cut to whatever `data_slice` selects and a
+  `CHAN` column renumbered against the output.
+
+  Beams that came from `BMAJ`/`BMIN`/`BPA` header keywords are deliberately *not*
+  promoted to a table: the header copy already carries them, and the single-beam
+  expansion over frequency in `__register_beam_table` is this package's model rather
+  than something the file recorded. `beam_table_extname` is the new attribute that
+  distinguishes the two.
+
 ### Added
+
+- **`FitsData.regrid_axis(name, values, data, cunit=None)`** — put the array on a new
+  grid along one axis, changing its length. `coords` is an `xarray.Coordinates`, so
+  assigning a coordinate of a different length raised `AlignmentError`; there was no way
+  to write a cube on a resampled channel grid at all. It replaces the data and the grid
+  in one call, rewrites `NAXISn`/`CRVALn`/`CDELTn`/`CRPIXn`, and rebuilds every
+  coordinate from the new WCS. Uneven grids are rejected — a FITS axis is linear in
+  `CRVAL`/`CDELT` — and a per-channel beam table is interpolated onto the new grid.
+
+  `values` are in the axis' *header* units, which are not necessarily the units `coords`
+  reports back: astropy normalises a spectral coordinate to SI whatever `CUNIT` says.
 
 - Each app returns typed outputs (`FitsOutputs`, `StackOutputs`, `StatsOutputs`), so
   apps can be chained in a shinobi `Recipe` — the output path of one step wires into the

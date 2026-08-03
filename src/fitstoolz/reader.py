@@ -414,7 +414,15 @@ class FitsData:
         beam_table = get_beam_table(self.fname)
         if beam_table is False:
             self.beam_table = None
+            self.beam_table_extname = None
             return
+
+        # Set only when the beams arrived as their own extension. Beams that came
+        # from BMAJ/BMIN/BPA keywords are already carried by the header copy on
+        # the way out, so writing a table for them would add an extension the
+        # input never had -- and, for a single beam expanded over frequency
+        # below, would promote this package's scaling model to recorded data.
+        self.beam_table_extname = beam_table.meta.get("EXTNAME")
 
         nbeams = len(beam_table)
 
@@ -438,9 +446,173 @@ class FitsData:
                         col_data[chan] = beam_table[col][0]
                 col_unit = getattr(beam_table[col], "unit", None) or 1
                 new_table[col] = col_data * col_unit
-            beam_table = Table(new_table)
+            # Carry the source metadata (EXTNAME and friends) across the
+            # expansion; a bare Table() would drop it and lose the provenance.
+            beam_table = Table(new_table, meta=beam_table.meta)
 
         self.beam_table = beam_table
+
+    def __output_beam_hdu(self, coord_names, data_slice):
+        """The beam extension to write beside the data, if there is one to write.
+
+        Returns None unless the beams came from an extension of their own --
+        beams read out of BMAJ/BMIN/BPA keywords ride along in the header copy
+        already, and re-emitting them as a table would change what the file
+        claims to record.
+
+        Rows follow the data: a spectral ``data_slice`` cuts the table to the
+        channels being written, and a ``CHAN`` column is renumbered against the
+        output rather than left pointing at the input's channels.
+
+        Args:
+            coord_names (list): Output coordinate order, python convention.
+            data_slice (list): Per-axis slices being written.
+
+        Returns:
+            astropy.io.fits.BinTableHDU|None
+        """
+        if self.beam_table is None or self.beam_table_extname is None:
+            return None
+
+        beams = self.beam_table
+        spectral = self.spectral_coord
+
+        if spectral is not None and spectral in coord_names and data_slice:
+            idx = self.coord_index(spectral)
+            # Only a per-channel table tracks the spectral axis; a single beam
+            # describes the whole cube however it is sliced.
+            if len(beams) == self.dshape[idx] and isinstance(data_slice[idx], slice):
+                beams = beams[data_slice[idx]]
+
+        if beams is not self.beam_table:
+            beams = beams.copy()
+            for col in beams.colnames:
+                if col.upper() == "CHAN":
+                    beams[col] = np.arange(len(beams), dtype=beams[col].dtype)
+
+        if "NCHAN" in beams.meta:
+            beams.meta["NCHAN"] = len(beams)
+
+        return fits.BinTableHDU(beams, name=self.beam_table_extname)
+
+    def regrid_axis(self, name: str, values, data, cunit: str = None):
+        """Put the array on a new grid along one axis, changing its length.
+
+        ``coords`` is an ``xarray.Coordinates``, so a coordinate of a different
+        length cannot simply be assigned to it -- xarray aligns, and raises. This
+        is the supported way to say "same cube, resampled": it replaces the data
+        and the grid together, so the two are never briefly inconsistent, then
+        rebuilds the header and every coordinate from the new WCS.
+
+        A FITS axis is linear in ``CRVAL``/``CDELT``, so ``values`` must be
+        evenly spaced; anything else cannot be written to a header and is
+        rejected rather than silently approximated.
+
+        If the regridded axis is the spectral one and the beams are per-channel,
+        the beam table is interpolated onto the new grid -- see
+        :meth:`__regrid_beam_table`.
+
+        Args:
+            name (str): Coordinate to regrid, e.g. ``'FREQ'``.
+            values (array): New coordinate values, in the axis' header units --
+                the ``CUNIT`` it has now, or ``cunit`` if that is given. Note
+                these are not necessarily the units ``coords`` reports back:
+                astropy normalises a spectral coordinate to SI regardless.
+            data (array): The array on that new grid. Must match the current
+                shape on every other axis, and ``len(values)`` on this one.
+            cunit (str, optional): New units for the axis, if they changed.
+
+        Raises:
+            ValueError: ``data`` does not match ``values`` or the other axes, or
+                ``values`` is not evenly spaced.
+        """
+        idx = self.coord_index(name)
+        values = np.asarray(values, dtype=float)
+
+        if data.ndim != self.ndim:
+            raise ValueError(f"New data has {data.ndim} axes, but this cube has {self.ndim}")
+        if data.shape[idx] != values.size:
+            raise ValueError(
+                f"New data has {data.shape[idx]} elements along '{name}', but {values.size} coordinates were given"
+            )
+        for axis, (was, now) in enumerate(zip(self.dshape, data.shape)):
+            if axis != idx and was != now:
+                raise ValueError(f"regrid_axis only changes '{name}'; axis {axis} went from {was} to {now}")
+
+        fits_axis = self.ndim - idx
+        if values.size > 1:
+            steps = np.diff(values)
+            cdelt = float(steps.mean())
+            if not np.allclose(steps, cdelt, rtol=1e-6, atol=0):
+                raise ValueError(
+                    f"'{name}' values are not evenly spaced, so they cannot be written as a FITS CRVAL/CDELT axis"
+                )
+        else:
+            cdelt = float(self.header.get(f"CDELT{fits_axis}", 1.0))
+
+        old_grid = self.__coord_values(name)
+
+        self.header[f"NAXIS{fits_axis}"] = int(values.size)
+        self.header[f"CRPIX{fits_axis}"] = 1
+        self.header[f"CRVAL{fits_axis}"] = float(values[0])
+        self.header[f"CDELT{fits_axis}"] = cdelt
+        if cunit is not None:
+            self.header[f"CUNIT{fits_axis}"] = cunit
+
+        self.data = data
+        self.wcs = WCS(self.header)
+        self.dim_info = self.wcs.get_axis_types()[::-1]
+        self.coord_names = self.wcs.axis_type_names[::-1]
+        self.__register_dimensions()
+
+        if name == self.spectral_coord:
+            # Both grids read back off `coords`, never from `values`. astropy
+            # reports a spectral coordinate in SI whatever CUNIT says, so
+            # interpolating the header-unit `values` against the SI `old_grid`
+            # would be out by a factor of CUNIT on any cube not already in Hz.
+            self.__regrid_beam_table(old_grid, self.__coord_values(name))
+
+    def __coord_values(self, name):
+        """A coordinate's grid as a flat float array, in the units astropy reports."""
+        return np.asarray(da.compute(self.coords[name].data)[0], dtype=float).ravel()
+
+    def __regrid_beam_table(self, old_grid, new_grid):
+        """Carry a per-channel beam table onto a new spectral grid.
+
+        The beams are a smooth function of frequency, so they are interpolated
+        rather than dropped -- ``__register_beam_table`` already models a single
+        beam's frequency dependence, and interpolating measured per-channel
+        beams is the more faithful of the two. A table that does not have one row
+        per input channel describes the cube as a whole and is left alone.
+        """
+        beams = self.beam_table
+        if beams is None or len(beams) != old_grid.size or old_grid.size < 2:
+            return
+
+        # np.interp needs an increasing sample grid; a spectral axis with a
+        # negative CDELT runs the other way.
+        order = np.argsort(old_grid)
+        samples = old_grid[order]
+
+        columns = {}
+        for col in beams.colnames:
+            column = np.asarray(beams[col])
+            if col.upper() == "CHAN":
+                values = np.arange(new_grid.size, dtype=column.dtype)
+            elif np.issubdtype(column.dtype, np.floating):
+                values = np.interp(new_grid, samples, column[order])
+            else:
+                # Labels rather than measurements (POL): take the nearest input
+                # channel instead of averaging between two of them.
+                nearest = np.abs(new_grid[:, None] - old_grid[None, :]).argmin(axis=1)
+                values = column[nearest]
+            unit = getattr(beams[col], "unit", None)
+            columns[col] = values * unit if unit is not None else values
+
+        meta = dict(beams.meta)
+        if "NCHAN" in meta:
+            meta["NCHAN"] = int(new_grid.size)
+        self.beam_table = Table(columns, meta=meta)
 
     def get_data(self, data_slice=None) -> np.ndarray:
         if data_slice:
@@ -525,6 +697,11 @@ class FitsData:
                     False -- this used to be hardcoded to True, which left a
                     caller no way to offer its own users a --no-overwrite.
 
+        A beam table read from an extension of its own is written back beside the
+        data, with its rows cut to whatever ``data_slice`` selects. Beams that
+        came from ``BMAJ``/``BMIN``/``BPA`` header keywords need no extension --
+        the header carries them already.
+
         Raises:
             FileExistsError: ``fname`` exists and ``overwrite`` is False.
         """
@@ -567,6 +744,11 @@ class FitsData:
         xds = self.get_xds(data_slice, coord_names, chunks)
         phdu = fits.PrimaryHDU(xds.data, header=header)
 
+        hdulist = fits.HDUList([phdu])
+        beam_hdu = self.__output_beam_hdu(coord_names, data_slice)
+        if beam_hdu is not None:
+            hdulist.append(beam_hdu)
+
         # Write beside the target and rename into place, rather than writing to
         # the target directly. `self.data` is read lazily from `self.fname`, so
         # writing in place -- which is exactly what the apps' `--replace` asks
@@ -575,7 +757,7 @@ class FitsData:
         # longer destroys whatever was there before.
         tmpname = fname.with_name(f".{fname.name}.fitstoolz-tmp")
         try:
-            phdu.writeto(tmpname, overwrite=True)
+            hdulist.writeto(tmpname, overwrite=True)
             os.replace(tmpname, fname)
         finally:
             if tmpname.exists():
