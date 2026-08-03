@@ -1,3 +1,4 @@
+import logging
 import os
 from pathlib import Path
 from typing import Any, Dict, List
@@ -13,6 +14,8 @@ from astropy.wcs import WCS
 from dask.array.core import normalize_chunks
 
 from fitstoolz.utils import contiguous_chunks, get_beam_table, open_fits
+
+log = logging.getLogger(__name__)
 
 
 def read_block(fname, hdu_index=0, block_info=None):
@@ -41,6 +44,62 @@ def read_block(fname, hdu_index=0, block_info=None):
         return np.asarray(hdulist[hdu_index].section[slices])
 
 
+def lazy_data(fname, hdu, hdu_index=0):
+    """An HDU's data as a dask array that has not been read yet.
+
+    ``da.asarray(hdu.data)`` -- which this replaced at both call sites -- pulls
+    the whole array into memory the moment it is called, whatever it is chunked
+    to afterwards, which caps the package at data that fits in RAM. The blocks
+    below read their own slice on demand instead, so building one costs a header
+    parse and the graph stays a few kilobytes however large the array is.
+
+    Note that ``hdu`` is consulted for its shape and dtype only; the blocks
+    reopen ``fname`` when they run, so the array outlives the handle.
+
+    Args:
+        fname (str|Path): File the blocks reopen to do their reads.
+        hdu: Open HDU, for its shape and dtype.
+        hdu_index (int): Index of that HDU within the file.
+
+    Returns:
+        dask.array.Array: Lazy view of the HDU's data.
+    """
+    shape = tuple(hdu.shape)
+    if not shape:
+        # A header-only HDU has nothing to chunk. Leave it to astropy, and to
+        # the caller, to say so.
+        return da.asarray(hdu.data)
+
+    # Ask the file for one element rather than deriving the dtype from BITPIX:
+    # `section` applies BSCALE/BZERO, so a scaled integer image reports the
+    # float dtype its blocks will really carry.
+    dtype = hdu.section[tuple(slice(0, 1) for _ in shape)].dtype
+
+    return da.map_blocks(
+        read_block,
+        fname=fname,
+        hdu_index=hdu_index,
+        dtype=dtype,
+        chunks=normalize_chunks(contiguous_chunks(shape, dtype), shape=shape, dtype=dtype),
+        meta=np.empty((), dtype=dtype),
+    )
+
+
+def to_unit(value, from_unit, to_unit_):
+    """Convert a scalar between two FITS unit strings, passing it through if it cannot.
+
+    Unitless axes (STOKES) and headers with no CUNIT are ordinary here, not
+    errors, so anything that does not describe a convertible pair is returned
+    unchanged rather than raised on.
+    """
+    if not from_unit or not to_unit_ or from_unit == to_unit_:
+        return value
+    try:
+        return float((value * units.Unit(from_unit)).to(units.Unit(to_unit_)).value)
+    except (ValueError, TypeError, units.UnitConversionError):
+        return value
+
+
 class FitsData:
     def __init__(self, fname: str, memmap: bool = True):
         self.fname = Path(fname)
@@ -53,7 +112,7 @@ class FitsData:
         self.coords = xr.Coordinates()
         self.open_arrays = []
         self.spectral_coord = None
-        self.data = self.__lazy_data()
+        self.data = lazy_data(self.fname, self.phdu)  # FitsData reads the primary HDU
         self.data_units = self.header.get("BUNIT", "Jy").strip()
 
         # astropy drops trailing axes with no NAXISn from array_shape, so an
@@ -68,39 +127,6 @@ class FitsData:
 
         self.__register_dimensions()
         self.__register_beam_table()
-
-    def __lazy_data(self):
-        """The HDU's data as a dask array that has not been read yet.
-
-        ``da.asarray(self.phdu.data)`` -- which this replaced -- pulls the whole
-        cube into memory the moment a ``FitsData`` is constructed, whatever it is
-        later chunked to, which caps the package at cubes that fit in RAM. The
-        blocks below read their own slice on demand instead, so opening a file
-        costs a header parse and the graph stays a few kilobytes regardless of
-        how large the cube is.
-
-        Returns:
-            dask.array.Array: Lazy view of the primary HDU's data.
-        """
-        shape = tuple(self.phdu.shape)
-        if not shape:
-            # A header-only HDU has nothing to chunk. Leave it to astropy, and to
-            # the WCS/data agreement check in __init__, to say so.
-            return da.asarray(self.phdu.data)
-
-        # Ask the file for one element rather than deriving the dtype from
-        # BITPIX: `section` applies BSCALE/BZERO, so a scaled integer image
-        # reports the float dtype its blocks will really carry.
-        dtype = self.phdu.section[tuple(slice(0, 1) for _ in shape)].dtype
-
-        return da.map_blocks(
-            read_block,
-            fname=self.fname,
-            hdu_index=0,  # FitsData reads the primary HDU; see self.phdu
-            dtype=dtype,
-            chunks=normalize_chunks(contiguous_chunks(shape, dtype), shape=shape, dtype=dtype),
-            meta=np.empty((), dtype=dtype),
-        )
 
     def coord_index(self, name: str) -> int:
         """
@@ -370,18 +396,24 @@ class FitsData:
             data = data[tuple(slc)]
         self.data = da.concatenate((self.data, data), axis=idx)
 
-        old_grid = da.compute(self.coords[name].data)[0]
-        dpix = self.coords[name].pixel_size
+        old_grid = self.__coord_values(name)
         in_ndim = data.shape[idx]
-        in_grid_start = old_grid[-1] + dpix
-        in_grid_end = in_grid_start + dpix * in_ndim
 
-        new_grid = da.concatenate(
-            (
-                old_grid,
-                da.arange(in_grid_start, in_grid_end, dpix),
-            ),
-        )
+        # Step off the coordinate grid, not `pixel_size`. CDELT is in the axis'
+        # header units while `coords` is in the units astropy reports -- SI for a
+        # spectral axis -- so on a cube whose CUNIT is not already SI the two
+        # differ by exactly that factor, and the appended channels land on top of
+        # each other instead of continuing the band.
+        if old_grid.size > 1:
+            step = float(old_grid[1] - old_grid[0])
+        else:
+            step = float(self.coords[name].pixel_size)
+
+        # Count out the new values rather than `arange(start, stop, step)`. The
+        # arange form derives its length from the endpoints, and floating point
+        # puts that one out often enough to leave the grid and the data
+        # disagreeing about how many channels there are.
+        new_grid = np.concatenate((old_grid, old_grid[-1] + step * np.arange(1, in_ndim + 1)))
 
         new_coord = (dim,), new_grid
         coords = xr.Coordinates()
@@ -393,20 +425,50 @@ class FitsData:
         self.coords = coords
         self.set_coord_attrs(name, dim)
 
-        if beams:
-            nbeams = len(beams)
-            for chan in range(nbeams):
-                self.beam_table.add_row(beams[chan])
+        self.__extend_beam_table(beams)
+
+    def __extend_beam_table(self, beams):
+        """Append an incoming file's beams, or give up on the table entirely.
+
+        A per-channel beam table only means anything if it has a row per channel.
+        The moment one file in a stack carries beams and another does not, no
+        honest table describes the result -- and since ``write_to_fits`` emits
+        the table, a short one would be written out as though it did. Drop it and
+        say so.
+
+        This used to append blindly, which crashed with an ``AttributeError``
+        when the first file had no beams, and silently produced a table shorter
+        than the cube when a later one did not.
+        """
+        incoming = beams if isinstance(beams, Table) else None
+
+        if self.beam_table is None and incoming is None:
+            return
+
+        if self.beam_table is None or incoming is None:
+            if self.beam_table is not None:
+                log.warning(
+                    "Dropping the beam table: not every file being stacked has one, "
+                    "so no per-channel table describes the result."
+                )
+            self.beam_table = None
+            self.beam_table_extname = None
+            return
+
+        for row in incoming:
+            self.beam_table.add_row(row)
 
     def expand_along_axis_from_files(self, name, files: List[Path]):
         idx = self.coord_index(name)
         for fname in files:
             with open_fits(fname, memmap=True) as hdul:
-                slc = [slice(None)] * self.ndim
-                if self.ndim != hdul[0].data.ndim:
+                # `shape`, not `data.ndim`: the point of the lazy read below is
+                # not to touch the array, and `.data` on a scaled image would.
+                data = lazy_data(fname, hdul[0])
+                if self.ndim != len(hdul[0].shape):
+                    slc = [slice(None)] * self.ndim
                     slc[idx] = da.newaxis
-                slc = tuple(slc)
-                data = da.asarray(hdul[0].data[slc])
+                    data = data[tuple(slc)]
                 beam_table = get_beam_table(fname)
             self.expand_along_axis(name, data, beam_table)
 
@@ -722,11 +784,21 @@ class FitsData:
             idx = out_ndim - i
             orig_idx = self.coord_index(coord)
 
+            orig_axis = self.ndim - orig_idx
             cdelt = self.coords[coord].pixel_size
             crpix = self.coords[coord].ref_pixel
-            cunit = self.coords[coord].units
-            crval = da.compute(self.coords[coord].data[crpix])[0]
-            ctype = self.header.get(f"CTYPE{self.ndim - orig_idx}", coord)
+            ctype = self.header.get(f"CTYPE{orig_axis}", coord)
+
+            # CDELT is the input header's, so it is in the input's units, and
+            # CUNIT has to say so. The coordinate grid is not in those units --
+            # astropy reports a spectral axis in SI whatever CUNIT said -- so
+            # CRVAL is converted back before it is written. Taking CUNIT from the
+            # grid instead, as this did, described a cube in MHz as one in Hz
+            # while leaving CDELT at its MHz value: a channel width a million
+            # times too narrow, and no round trip.
+            cunit = self.header.get(f"CUNIT{orig_axis}") or self.coords[coord].units
+            crval = float(da.compute(self.coords[coord].data[crpix])[0])
+            crval = to_unit(crval, self.coords[coord].units, cunit)
 
             header.update(
                 {

@@ -49,6 +49,41 @@ tool) — the pattern simms 3.0 already uses.
 
 ### Fixed
 
+- **A cube whose `CUNIT` is not already SI is no longer corrupted.** Header units
+  (`CRVAL`/`CDELT`/`CUNIT`, and `coords[...].pixel_size`) and world units (`coords`
+  values, `world_axis_units`) are two different systems — astropy reports a spectral
+  axis in SI whatever `CUNIT` says — and three places mixed them. All three were silent,
+  and all three are invisible on a cube already in Hz:
+
+  - `write_to_fits` took `CUNIT` from the coordinate grid while `CDELT` came from the
+    header, so a cube in MHz was written as one in Hz *with its MHz channel width*: a
+    channel a million times too narrow, and no round trip. `CUNIT` and `CDELT` now both
+    come from the input header and `CRVAL` is converted into that unit by the new
+    `reader.to_unit`, so an MHz cube stays an MHz cube.
+  - `expand_along_axis` extended the grid by `pixel_size`, i.e. `CDELT` in header units,
+    so stacking two MHz cubes appended channels 1 Hz apart — the whole second file piled
+    on top of the end of the first. The step now comes from the grid itself.
+  - `regrid_axis`'s beam interpolation was already fixed for this in the previous
+    release; the rule is now written down in `AGENTS.md`.
+
+- **`expand_along_axis` no longer loses or gains a channel to floating point.** The new
+  coordinates were built with `arange(start, stop, step)`, whose length is derived from
+  its endpoints — reliable only when `step` is exactly the grid's own spacing, which
+  `CDELT` was not. The values are counted out instead, which removes the question rather
+  than narrowing it.
+
+- **`expand_along_axis_from_files` no longer reads each extra file into memory.** It
+  built its arrays with `da.asarray(hdu.data)` — the same defect fixed in `FitsData`
+  last release, in a second place — so `stack` materialised every input whole. Both call
+  sites now share one `reader.lazy_data` helper.
+
+- **Stacking files with inconsistent beam tables no longer crashes or lies.** Appending
+  was unconditional: it raised `AttributeError` when the *first* file had no beams, and
+  silently produced a table shorter than the cube when a *later* one did not — which,
+  now that `write_to_fits` emits the table, would have been written out as though it
+  described the whole cube. A stack whose files disagree drops the table and logs a
+  warning, since no per-channel table honestly describes the result.
+
 - **`FitsData` no longer reads the whole cube into memory when you open a file.** The
   data was built with `da.asarray(hdu.data)`, which materialises: constructing a
   `FitsData` cost one full in-RAM copy of the array, whatever it was chunked to

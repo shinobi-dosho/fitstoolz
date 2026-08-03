@@ -101,14 +101,41 @@ interpolates it onto the new grid, and a `CHAN` column is renumbered against the
 output. A table that does not have one row per channel describes the cube as a
 whole and is left alone.
 
-## Regridding: header units in, SI out
+## Two unit systems, and the line between them
 
-`regrid_axis` takes `values` in the axis' **header** units, because that is what
-`CRVAL`/`CDELT` are written in. `coords` does not report them back in those
-units — astropy normalises a spectral coordinate to SI whatever `CUNIT` says. So
-anything comparing an old grid to a new one (the beam interpolation) must read
-*both* off `coords`, never from `values`; mixing the two is a factor-of-`CUNIT`
-error that a cube already in Hz will not show you.
+This is the single richest source of bugs in the package, because every one of
+them is invisible on a cube whose `CUNIT` is already SI — which is most of them.
+
+There are two unit systems in play and they are **not** the same:
+
+- **Header units** — what `CRVAL`, `CDELT` and `CUNIT` are written in, and what
+  `coords[...].pixel_size` (straight off `CDELT`) carries.
+- **World units** — what `coords[...]` values and `world_axis_units` report.
+  astropy normalises a spectral axis to SI here regardless of `CUNIT`, so a cube
+  in MHz has a header in MHz and a grid in Hz.
+
+The rule: **never mix a value from one system with a value from the other.**
+Three separate bugs came from doing exactly that, and all three shipped:
+
+- `expand_along_axis` stepped the grid by `pixel_size` (header) to extend a grid
+  in world units, so stacking two MHz cubes appended channels 1 Hz apart and
+  piled them on top of each other.
+- `write_to_fits` wrote `CUNIT` from `world_axis_units` while `CDELT` came from
+  the header, describing an MHz cube as a Hz one with its MHz channel width.
+  `to_unit` now converts `CRVAL` into whichever unit `CUNIT` claims.
+- `regrid_axis` takes `values` in header units, so its beam interpolation reads
+  *both* grids off `coords` rather than comparing against `values`.
+
+When you need a spacing, prefer differencing the coordinate grid over reading
+`CDELT`: it is in the same system as everything else you are holding. When you
+write a header, convert explicitly and say which way you are going.
+
+## One lazy constructor
+
+`reader.lazy_data(fname, hdu)` is the only place a dask array is built over an
+HDU, and both `FitsData.__init__` and `expand_along_axis_from_files` go through
+it. There were two `da.asarray(hdu.data)` call sites and each had to be found
+separately; keep it to one.
 
 ## Apps: one module, one pystep, four names
 
