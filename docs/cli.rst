@@ -29,4 +29,6 @@ a modified copy:
 ``stack`` writes to its required ``--stacked-fits`` instead, and ``stats``
 writes nothing at all.
 
-All writes use ``overwrite=True``; see :doc:`security`.
+The apps pass ``overwrite=True`` down to :meth:`~fitstoolz.reader.FitsData.write_to_fits`,
+so a destination you name on the command line is a destination the app will
+replace. The library default is the other way round — see :doc:`security`.

@@ -28,7 +28,7 @@ def runit(opts):
         chunks = myfits.build_chunks(
             ra_chunks=opts.ra_chunks, dec_chunks=opts.dec_chunks, spectral_chunks=opts.spectral_chunks
         )
-        myfits.write_to_fits(outfits, chunks=chunks)
+        myfits.write_to_fits(outfits, chunks=chunks, overwrite=True)
 
     log.info("Finished. File written to: %s", outfits)
 

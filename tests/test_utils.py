@@ -4,7 +4,7 @@ from astropy import units
 from astropy.io import fits
 from astropy.wcs import WCS
 
-from fitstoolz.utils import beam_unit, get_beam_table, reorder_wcs
+from fitstoolz.utils import beam_unit, contiguous_chunks, get_beam_table, reorder_wcs
 
 from . import InitTest
 
@@ -12,6 +12,39 @@ from . import InitTest
 @pytest.fixture
 def config():
     return InitTest()
+
+
+# --------------------------------------------------------------------------- contiguous_chunks
+
+
+def test_contiguous_chunks_keeps_a_small_array_whole():
+    assert contiguous_chunks((4, 32, 32), "f4", limit="1MiB") == (4, 32, 32)
+
+
+def test_contiguous_chunks_splits_the_slowest_axis_that_does_not_fit():
+    # One 32x32 float32 plane is 4 KiB, so a 16 KiB limit holds four of them.
+    assert contiguous_chunks((100, 32, 32), "f4", limit=16 * 1024) == (4, 32, 32)
+
+
+def test_contiguous_chunks_keeps_trailing_axes_whole():
+    """Splitting a trailing axis would scatter the read across the file."""
+    chunks = contiguous_chunks((2, 512, 450, 450), "f4", limit="8MiB")
+    assert chunks[-2:] == (450, 450)
+    assert chunks[0] == 1, "axes slower than the split one go to a single element"
+    assert 0 < chunks[1] < 512
+
+
+def test_contiguous_chunks_steps_over_a_degenerate_leading_axis():
+    """A length-1 Stokes axis cannot bound the chunk; the split must move inwards."""
+    chunks = contiguous_chunks((1, 512, 450, 450), "f4", limit="8MiB")
+    assert chunks[0] == 1
+    assert chunks[1] < 512
+    assert np.prod(chunks) * 4 <= 8 * 1024**2
+
+
+def test_contiguous_chunks_never_returns_a_zero_length_chunk():
+    """A limit smaller than one row still has to yield a readable block."""
+    assert contiguous_chunks((8, 64, 64), "f8", limit=1) == (1, 1, 1)
 
 
 def test_reorder_wcs():

@@ -1,3 +1,4 @@
+import os
 from pathlib import Path
 from typing import Any, Dict, List
 
@@ -9,8 +10,35 @@ from astropy.coordinates import SpectralCoord
 from astropy.io import fits
 from astropy.table import Table
 from astropy.wcs import WCS
+from dask.array.core import normalize_chunks
 
-from fitstoolz.utils import get_beam_table, open_fits
+from fitstoolz.utils import contiguous_chunks, get_beam_table, open_fits
+
+
+def read_block(fname, hdu_index=0, block_info=None):
+    """Read a single dask block straight off disk.
+
+    Opening the file per block rather than reusing the ``FitsData`` handle is
+    deliberate, for two reasons. ``HDU.section`` reads through the HDU's own file
+    object, so blocks running under the threaded scheduler would otherwise be
+    sharing one seek position. And a graph that carries its own filename can be
+    computed after the ``FitsData`` it came from has been closed, which is what
+    lets ``get_xds`` results outlive a ``with`` block.
+
+    Args:
+        fname (str|Path): FITS file to read from.
+        hdu_index (int): HDU to read.
+        block_info: Supplied by ``dask.array.map_blocks``; says which corner of
+            the array this call is responsible for.
+
+    Returns:
+        numpy.ndarray: The block's data.
+    """
+    slices = tuple(slice(start, stop) for start, stop in block_info[None]["array-location"])
+    # memmap=False: `section` reads only the bytes asked for, so mapping the
+    # whole file into every worker's address space buys nothing.
+    with open_fits(fname, memmap=False) as hdulist:
+        return np.asarray(hdulist[hdu_index].section[slices])
 
 
 class FitsData:
@@ -25,7 +53,7 @@ class FitsData:
         self.coords = xr.Coordinates()
         self.open_arrays = []
         self.spectral_coord = None
-        self.data = da.asarray(self.phdu.data)
+        self.data = self.__lazy_data()
         self.data_units = self.header.get("BUNIT", "Jy").strip()
 
         # astropy drops trailing axes with no NAXISn from array_shape, so an
@@ -40,6 +68,39 @@ class FitsData:
 
         self.__register_dimensions()
         self.__register_beam_table()
+
+    def __lazy_data(self):
+        """The HDU's data as a dask array that has not been read yet.
+
+        ``da.asarray(self.phdu.data)`` -- which this replaced -- pulls the whole
+        cube into memory the moment a ``FitsData`` is constructed, whatever it is
+        later chunked to, which caps the package at cubes that fit in RAM. The
+        blocks below read their own slice on demand instead, so opening a file
+        costs a header parse and the graph stays a few kilobytes regardless of
+        how large the cube is.
+
+        Returns:
+            dask.array.Array: Lazy view of the primary HDU's data.
+        """
+        shape = tuple(self.phdu.shape)
+        if not shape:
+            # A header-only HDU has nothing to chunk. Leave it to astropy, and to
+            # the WCS/data agreement check in __init__, to say so.
+            return da.asarray(self.phdu.data)
+
+        # Ask the file for one element rather than deriving the dtype from
+        # BITPIX: `section` applies BSCALE/BZERO, so a scaled integer image
+        # reports the float dtype its blocks will really carry.
+        dtype = self.phdu.section[tuple(slice(0, 1) for _ in shape)].dtype
+
+        return da.map_blocks(
+            read_block,
+            fname=self.fname,
+            hdu_index=0,  # FitsData reads the primary HDU; see self.phdu
+            dtype=dtype,
+            chunks=normalize_chunks(contiguous_chunks(shape, dtype), shape=shape, dtype=dtype),
+            meta=np.empty((), dtype=dtype),
+        )
 
     def coord_index(self, name: str) -> int:
         """
@@ -444,7 +505,12 @@ class FitsData:
         return chunks
 
     def write_to_fits(
-        self, fname: Path, coord_names: list[str] = None, data_slice: List[Any] = None, chunks: Dict = None
+        self,
+        fname: Path,
+        coord_names: list[str] = None,
+        data_slice: List[Any] = None,
+        chunks: Dict = None,
+        overwrite: bool = False,
     ):
         """Write FitsData object into a FITS file
 
@@ -455,6 +521,12 @@ class FitsData:
                     you need to give coord_names=['STOKES', 'FREQ', 'DEC', 'RA'].
             data_slice (slice): Tuple of sclices
             chunks (Dict|Mapping): How to chunk data when writing to disk
+            overwrite (bool): Replace ``fname`` if it already exists. Defaults to
+                    False -- this used to be hardcoded to True, which left a
+                    caller no way to offer its own users a --no-overwrite.
+
+        Raises:
+            FileExistsError: ``fname`` exists and ``overwrite`` is False.
         """
 
         coord_names = coord_names or self.coord_names
@@ -488,10 +560,26 @@ class FitsData:
                     f"CRVAL{idx}": crval,
                 }
             )
+        fname = Path(fname)
+        if fname.exists() and not overwrite:
+            raise FileExistsError(f"Output FITS file '{fname}' already exists. Pass overwrite=True to replace it.")
+
         xds = self.get_xds(data_slice, coord_names, chunks)
         phdu = fits.PrimaryHDU(xds.data, header=header)
 
-        phdu.writeto(fname, overwrite=True)
+        # Write beside the target and rename into place, rather than writing to
+        # the target directly. `self.data` is read lazily from `self.fname`, so
+        # writing in place -- which is exactly what the apps' `--replace` asks
+        # for -- would otherwise truncate the file the blocks are still being
+        # read from. The rename is atomic, so a write that dies part way also no
+        # longer destroys whatever was there before.
+        tmpname = fname.with_name(f".{fname.name}.fitstoolz-tmp")
+        try:
+            phdu.writeto(tmpname, overwrite=True)
+            os.replace(tmpname, fname)
+        finally:
+            if tmpname.exists():
+                tmpname.unlink()
 
     def __enter__(self):
         return self

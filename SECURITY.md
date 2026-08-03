@@ -102,15 +102,24 @@ notion of a workspace root and does not try to confine you to one.
 
 ### Writes are explicit, and `--replace` really does overwrite
 
-Every FITS write in fitstoolz passes `overwrite=True`. **A path you give
-fitstoolz to write is a path fitstoolz will clobber**, with no prompt and no
-backup.
+`FitsData.write_to_fits` refuses to replace an existing file unless the caller
+passes `overwrite=True`; it raises `FileExistsError` otherwise. **The apps all
+pass it**, so on the command line a path you name is still a path fitstoolz will
+clobber, with no prompt and no backup. The difference is that a library caller
+now decides for itself, and can offer its own users a `--no-overwrite` that
+means something.
 
 The guard is that there is no default output path. `fitstoolz.apps.outfits_name`
 returns a destination only when `--outfile` is given, or when `--replace` is
 given (in which case the destination *is* the input file, edited in place). With
 neither, the app raises rather than guessing — so overwriting is always
 something the caller asked for by name.
+
+Writes are staged through a `.<name>.fitstoolz-tmp` file in the destination
+directory and renamed into place. That makes the replacement atomic: a write
+that fails part way leaves the previous file intact rather than a truncated one.
+It also means the destination briefly needs room for both copies, and that a
+crash can leave the temporary behind.
 
 `stack` and `stats` are the exceptions to the shape, not the rule: `stack`
 requires `--stacked-fits`, and `stats` writes nothing at all.

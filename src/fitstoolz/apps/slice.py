@@ -32,7 +32,7 @@ def runit(opts):
         chunks = myfits.build_chunks(
             ra_chunks=opts.ra_chunks, dec_chunks=opts.dec_chunks, spectral_chunks=opts.spectral_chunks
         )
-        myfits.write_to_fits(outfits, coord_names=coord_names, data_slice=slc, chunks=chunks)
+        myfits.write_to_fits(outfits, coord_names=coord_names, data_slice=slc, chunks=chunks, overwrite=True)
 
     return outfits
 

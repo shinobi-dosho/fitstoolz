@@ -2,12 +2,17 @@
 axis manipulation, beam handling and the xarray/FITS round trip.
 """
 
+import pickle
+from pathlib import Path
+
+import dask
 import numpy as np
 import pytest
 from astropy import units
 from astropy.io import fits
 from astropy.table import Table
 
+from fitstoolz import reader
 from fitstoolz.reader import FitsData
 
 from . import InitTest
@@ -333,13 +338,146 @@ def test_write_to_fits_round_trip(config):
     data = np.random.default_rng(0).normal(size=(3, 16, 16)).astype(np.float32)
     path = write_fits(config, npix=16, nchan=3, data=data)
     fds = FitsData(path)
+    # random_named_file creates the file, so this also exercises overwrite=True.
     out = config.random_named_file(suffix=".fits")
-    fds.write_to_fits(out, coord_names=["FREQ", "DEC", "RA"])
+    fds.write_to_fits(out, coord_names=["FREQ", "DEC", "RA"], overwrite=True)
 
     reread = FitsData(out)
     assert reread.dshape == (3, 16, 16)
     np.testing.assert_allclose(np.asarray(reread.data), data, rtol=1e-6)
     np.testing.assert_allclose(np.squeeze(reread.coords["FREQ"].data), np.squeeze(fds.coords["FREQ"].data), rtol=1e-12)
+
+
+def test_write_to_fits_refuses_to_clobber_by_default(config):
+    fds = FitsData(write_fits(config, npix=8, nchan=2))
+    out = config.random_named_file(suffix=".fits")
+    with pytest.raises(FileExistsError, match="already exists"):
+        fds.write_to_fits(out)
+
+
+def test_write_to_fits_leaves_no_temporary_behind(config):
+    """The write goes via a sibling temp file; it must not survive the call."""
+    fds = FitsData(write_fits(config, npix=8, nchan=2))
+    out = Path(config.random_named_file(suffix=".fits"))
+    fds.write_to_fits(out, overwrite=True)
+    assert not list(out.parent.glob(".*fitstoolz-tmp"))
+
+
+def test_failed_write_leaves_the_original_intact(config, monkeypatch):
+    """The staged write is what makes replacing a file atomic."""
+    data = np.random.default_rng(4).normal(size=(2, 8, 8)).astype(np.float32)
+    path = Path(write_fits(config, npix=8, nchan=2, data=data))
+    fds = FitsData(write_fits(config, npix=8, nchan=2))
+
+    def explode(self, name, *args, **kwargs):
+        # Half-write the temporary before failing, the way a full disk would, so
+        # the cleanup path is what gets exercised rather than a no-op.
+        Path(name).write_bytes(b"SIMPLE  =                    T" + b" " * 50)
+        raise OSError("disk full")
+
+    monkeypatch.setattr(fits.PrimaryHDU, "writeto", explode)
+    with pytest.raises(OSError, match="disk full"):
+        fds.write_to_fits(path, overwrite=True)
+
+    np.testing.assert_allclose(fits.getdata(path), data, rtol=1e-6)
+    assert not list(path.parent.glob(".*fitstoolz-tmp"))
+
+
+@pytest.mark.filterwarnings("ignore::astropy.wcs.FITSFixedWarning")
+def test_header_only_hdu_is_reported_not_read(config):
+    """A primary HDU with no data has nothing to chunk; say so clearly."""
+    path = config.random_named_file(suffix=".fits")
+    fits.HDUList([fits.PrimaryHDU()]).writeto(path, overwrite=True)
+    with pytest.raises(RuntimeError, match="does not match Image data"):
+        FitsData(path)
+
+
+def test_write_in_place_does_not_corrupt_the_source(config):
+    """`--replace` writes over the file the lazy blocks are still reading from.
+
+    With the data read on demand rather than up front, writing straight to the
+    destination truncates the source mid-read. The write goes through a
+    temporary and is renamed into place precisely so this stays correct.
+    """
+    data = np.random.default_rng(3).normal(size=(4, 16, 16)).astype(np.float32)
+    path = write_fits(config, npix=16, nchan=4, data=data)
+
+    with FitsData(path) as fds:
+        fds.write_to_fits(path, overwrite=True)
+
+    np.testing.assert_allclose(np.asarray(FitsData(path).data), data, rtol=1e-6)
+
+
+# --------------------------------------------------------------------------- laziness
+
+
+def test_data_is_not_read_at_construction(config):
+    """Opening a file must cost a header parse, not a cube.
+
+    The graph is the measurable proxy: a materialised array is embedded in it, so
+    its serialised size tracks the data. A graph of on-demand reads carries only
+    slices and a filename, and stays flat as the cube grows.
+    """
+    small = FitsData(write_fits(config, npix=16, nchan=2))  # 2 KiB
+    large = FitsData(write_fits(config, npix=64, nchan=64))  # 1 MiB
+
+    small_graph = len(pickle.dumps(dict(small.data.dask)))
+    large_graph = len(pickle.dumps(dict(large.data.dask)))
+
+    assert large.data.nbytes > 100 * small.data.nbytes
+    assert large_graph < 8192, f"graph is {large_graph} bytes -- the data looks embedded in it"
+    assert large_graph < 2 * small_graph
+
+
+def test_blocks_read_only_their_own_slice(config, monkeypatch):
+    """Computing one block must not pull in the neighbouring ones."""
+    data = np.random.default_rng(1).normal(size=(8, 16, 16)).astype(np.float32)
+    path = write_fits(config, npix=16, nchan=8, data=data)
+
+    reads = []
+    original = reader.read_block
+
+    # block_info has to be named: map_blocks introspects for that keyword and
+    # only passes it to a function that declares it.
+    def spy(*args, block_info=None, **kwargs):
+        result = original(*args, block_info=block_info, **kwargs)
+        reads.append(result.size)
+        return result
+
+    # Patch before construction: map_blocks captures the function at graph-build
+    # time. One channel plane is 1 KiB, so this chunks to a block per channel.
+    monkeypatch.setattr(reader, "read_block", spy)
+    with dask.config.set({"array.chunk-size": "1kiB"}):
+        fds = FitsData(path)
+        assert fds.data.numblocks[0] == 8
+        block = fds.data.blocks[2, 0, 0].compute()
+
+    np.testing.assert_allclose(block[0], data[2], rtol=1e-6)
+    assert sum(reads) < data.size
+
+
+def test_lazy_read_matches_the_file_including_scaled_data(config):
+    """Round-trip equality, and the BSCALE/BZERO path that fixes the block dtype."""
+    raw = np.arange(3 * 8 * 8, dtype=np.int16).reshape(3, 8, 8)
+    header = make_header(8, nchan=3)
+    header["BZERO"], header["BSCALE"] = 100.0, 0.5
+    path = config.random_named_file(suffix=".fits")
+    hdu = fits.PrimaryHDU(raw, header=header)
+    hdu.writeto(path, overwrite=True)
+
+    expected = fits.getdata(path)
+    fds = FitsData(path)
+    assert fds.data.dtype == expected.dtype
+    np.testing.assert_allclose(np.asarray(fds.data), expected, rtol=1e-6)
+
+
+def test_graph_survives_closing_the_file(config):
+    """A graph carrying its own filename can be computed after the handle closes."""
+    data = np.random.default_rng(2).normal(size=(2, 8, 8)).astype(np.float32)
+    path = write_fits(config, npix=8, nchan=2, data=data)
+    with FitsData(path) as fds:
+        lazy = fds.data
+    np.testing.assert_allclose(np.asarray(lazy), data, rtol=1e-6)
 
 
 def test_context_manager_closes_the_file(config):

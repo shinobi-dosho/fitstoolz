@@ -1,10 +1,13 @@
 from pathlib import Path
-from typing import List
+from typing import List, Tuple
 
+import dask
+import numpy as np
 from astropy import units
 from astropy.io import fits
 from astropy.table import Table
 from astropy.wcs import WCS
+from dask.utils import parse_bytes
 
 
 def open_fits(fname, **kwargs) -> fits.HDUList:
@@ -34,6 +37,47 @@ def open_fits(fname, **kwargs) -> fits.HDUList:
     if not path.exists():
         raise FileNotFoundError(f"Input FITS file '{fname}' does not exist")
     return fits.open(path, **kwargs)
+
+
+def contiguous_chunks(shape: Tuple[int, ...], dtype, limit=None) -> Tuple[int, ...]:
+    """Chunk shape that splits a FITS array along its slowest-varying axes.
+
+    FITS stores ``NAXIS1`` fastest-varying, which is the *last* axis in numpy
+    order, so a chunk that keeps the trailing axes whole is a contiguous run of
+    bytes on disk. Chunking the other way round -- along RA, say -- makes every
+    chunk a scatter-read over the whole file. The reader therefore chunks for the
+    file layout rather than guessing an access pattern; a caller who wants RA
+    blocks asks for them through ``FitsData.get_xds``.
+
+    Trailing axes are kept whole for as long as they fit within ``limit``. The
+    first axis that does not fit is split, and every axis slower than it is
+    chunked to one element.
+
+    Args:
+        shape (tuple): Array shape, in numpy (C) order.
+        dtype: Element type, or anything ``numpy.dtype`` accepts.
+        limit (int|str, optional): Largest chunk in bytes, or a string such as
+            ``'128MiB'``. Defaults to dask's own ``array.chunk-size``.
+
+    Returns:
+        tuple: Chunk length per axis, ready to hand to dask as ``chunks=``.
+    """
+    itemsize = np.dtype(dtype).itemsize
+    limit = parse_bytes(limit if limit is not None else dask.config.get("array.chunk-size"))
+
+    chunks = list(shape)
+    trailing = itemsize
+    for axis in range(len(shape) - 1, -1, -1):
+        if trailing * shape[axis] > limit:
+            # The array stops fitting at this axis. Split it, and take the axes
+            # slower still one element at a time.
+            chunks[axis] = max(1, limit // trailing)
+            for slower in range(axis):
+                chunks[slower] = 1
+            break
+        trailing *= shape[axis]
+
+    return tuple(chunks)
 
 
 def reorder_wcs(wcs, old_order: List[str], new_order: List[str]) -> WCS:
