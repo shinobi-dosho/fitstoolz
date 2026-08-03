@@ -375,7 +375,7 @@ def test_failed_write_leaves_the_original_intact(config, monkeypatch):
         Path(name).write_bytes(b"SIMPLE  =                    T" + b" " * 50)
         raise OSError("disk full")
 
-    monkeypatch.setattr(fits.PrimaryHDU, "writeto", explode)
+    monkeypatch.setattr(fits.HDUList, "writeto", explode)
     with pytest.raises(OSError, match="disk full"):
         fds.write_to_fits(path, overwrite=True)
 
@@ -406,6 +406,238 @@ def test_write_in_place_does_not_corrupt_the_source(config):
         fds.write_to_fits(path, overwrite=True)
 
     np.testing.assert_allclose(np.asarray(FitsData(path).data), data, rtol=1e-6)
+
+
+# --------------------------------------------------------------------------- beam tables on write
+
+
+def beam_hdu(nrows, name="BEAMS", **meta):
+    table = Table(
+        {
+            "BMAJ": np.linspace(0.4, 0.2, nrows),
+            "BMIN": np.linspace(0.2, 0.1, nrows),
+            "BPA": np.full(nrows, 30.0),
+            "CHAN": np.arange(nrows),
+            "POL": np.zeros(nrows, dtype=int),
+        }
+    )
+    for col in ("BMAJ", "BMIN", "BPA"):
+        table[col].unit = units.deg
+    hdu = fits.BinTableHDU(table, name=name)
+    for key, value in meta.items():
+        hdu.header[key] = value
+    return hdu
+
+
+def test_beam_extension_survives_a_write(config):
+    """A per-channel beam table used to be dropped: only a PrimaryHDU was written."""
+    path = write_fits(config, npix=8, nchan=4, extra_hdus=(beam_hdu(4),))
+    out = config.random_named_file(suffix=".fits")
+    FitsData(path).write_to_fits(out, overwrite=True)
+
+    with fits.open(out) as hdulist:
+        assert [hdu.name for hdu in hdulist] == ["PRIMARY", "BEAMS"]
+    reread = FitsData(out)
+    np.testing.assert_allclose(np.asarray(reread.beam_table["BMAJ"]), np.linspace(0.4, 0.2, 4))
+    assert str(reread.beam_table["BMAJ"].unit) == "deg"
+
+
+def test_beam_extension_name_and_metadata_are_preserved(config):
+    path = write_fits(config, npix=8, nchan=3, extra_hdus=(beam_hdu(3, name="CASAMBM", NCHAN=3),))
+    out = config.random_named_file(suffix=".fits")
+    FitsData(path).write_to_fits(out, overwrite=True)
+
+    with fits.open(out) as hdulist:
+        assert hdulist[1].name == "CASAMBM"
+        assert hdulist[1].header["NCHAN"] == 3
+
+
+def test_beam_rows_follow_a_spectral_slice(config):
+    path = write_fits(config, npix=8, nchan=8, extra_hdus=(beam_hdu(8, NCHAN=8),))
+    fds = FitsData(path)
+    out = config.random_named_file(suffix=".fits")
+    data_slice = [slice(2, 5), slice(None), slice(None)]
+    fds.write_to_fits(out, data_slice=data_slice, overwrite=True)
+
+    reread = FitsData(out)
+    assert reread.dshape == (3, 8, 8)
+    np.testing.assert_allclose(np.asarray(reread.beam_table["BMAJ"]), np.linspace(0.4, 0.2, 8)[2:5])
+    # CHAN describes the written channels, not the ones they came from.
+    np.testing.assert_array_equal(np.asarray(reread.beam_table["CHAN"]), [0, 1, 2])
+    with fits.open(out) as hdulist:
+        assert hdulist[1].header["NCHAN"] == 3
+
+
+def test_header_keyword_beams_do_not_become_an_extension(config):
+    """BMAJ/BMIN/BPA ride along in the header; a table would invent an extension.
+
+    A single beam is expanded per channel in memory, and that expansion is this
+    package's model rather than something the file recorded -- writing it out as
+    a table would promote the model to data.
+    """
+    header = make_header(8, nchan=4)
+    header["BMAJ"], header["BMIN"], header["BPA"] = 1e-3, 1e-3, 0.0
+    path = config.random_named_file(suffix=".fits")
+    fits.PrimaryHDU(np.zeros((4, 8, 8), np.float32), header=header).writeto(path, overwrite=True)
+
+    fds = FitsData(path)
+    assert len(fds.beam_table) == 4, "single beam should still be expanded in memory"
+
+    out = config.random_named_file(suffix=".fits")
+    fds.write_to_fits(out, overwrite=True)
+    with fits.open(out) as hdulist:
+        assert [hdu.name for hdu in hdulist] == ["PRIMARY"]
+        assert hdulist[0].header["BMAJ"] == 1e-3
+
+
+def test_stacked_beams_reach_the_output(config):
+    """`stack` accumulates rows through expand_along_axis; they must be written."""
+    first = write_fits(config, npix=8, nchan=2, extra_hdus=(beam_hdu(2),))
+    second = write_fits(config, npix=8, nchan=2, extra_hdus=(beam_hdu(2),))
+
+    fds = FitsData(first)
+    fds.expand_along_axis_from_files("FREQ", [second])
+    assert len(fds.beam_table) == 4
+
+    out = config.random_named_file(suffix=".fits")
+    fds.write_to_fits(out, overwrite=True)
+    assert len(FitsData(out).beam_table) == 4
+
+
+# --------------------------------------------------------------------------- regrid_axis
+
+
+def test_regrid_axis_changes_the_channel_count(config):
+    """The gap this closes: coords is an xr.Coordinates and will not be realigned."""
+    path = write_fits(config, npix=8, nchan=32)
+    fds = FitsData(path)
+
+    with pytest.raises(Exception, match="conflicting dimension sizes|cannot reindex|align"):
+        fds.coords["FREQ"] = ("spectral",), np.arange(29, dtype=float)
+
+    new_grid = 1.4001e9 + np.arange(29) * 1.0001e6
+    fds.regrid_axis("FREQ", new_grid, np.ones((29, 8, 8), dtype=np.float32))
+
+    assert fds.dshape == (29, 8, 8)
+    assert fds.nchan == 29
+    np.testing.assert_allclose(np.squeeze(fds.coords["FREQ"].data), new_grid, rtol=1e-12)
+
+
+def test_regrid_axis_round_trips_through_a_file(config):
+    path = write_fits(config, npix=8, nchan=32)
+    fds = FitsData(path)
+    new_grid = 1.4001e9 + np.arange(29) * 1.0001e6
+    data = np.random.default_rng(5).normal(size=(29, 8, 8)).astype(np.float32)
+    fds.regrid_axis("FREQ", new_grid, data)
+
+    out = config.random_named_file(suffix=".fits")
+    fds.write_to_fits(out, overwrite=True)
+
+    header = fits.getheader(out)
+    assert header["NAXIS3"] == 29
+    assert header["CRPIX3"] == 1
+    np.testing.assert_allclose(header["CRVAL3"], new_grid[0], rtol=1e-12)
+    np.testing.assert_allclose(header["CDELT3"], 1.0001e6, rtol=1e-9)
+
+    reread = FitsData(out)
+    np.testing.assert_allclose(np.asarray(reread.data), data, rtol=1e-6)
+    np.testing.assert_allclose(np.squeeze(reread.coords["FREQ"].data), new_grid, rtol=1e-9)
+
+
+def test_regrid_axis_rejects_a_non_linear_grid(config):
+    """A FITS axis is CRVAL/CDELT; an uneven grid cannot be written as one."""
+    fds = FitsData(write_fits(config, npix=8, nchan=4))
+    uneven = np.array([1.4e9, 1.401e9, 1.403e9, 1.409e9])
+    with pytest.raises(ValueError, match="evenly spaced"):
+        fds.regrid_axis("FREQ", uneven, np.ones((4, 8, 8), dtype=np.float32))
+
+
+def test_regrid_axis_rejects_mismatched_data(config):
+    fds = FitsData(write_fits(config, npix=8, nchan=4))
+    grid = 1.4e9 + np.arange(6) * 1e6
+    with pytest.raises(ValueError, match="6 coordinates were given|elements along"):
+        fds.regrid_axis("FREQ", grid, np.ones((5, 8, 8), dtype=np.float32))
+    with pytest.raises(ValueError, match="only changes 'FREQ'"):
+        fds.regrid_axis("FREQ", grid, np.ones((6, 16, 8), dtype=np.float32))
+
+
+def test_regrid_axis_rejects_data_of_the_wrong_rank(config):
+    fds = FitsData(write_fits(config, npix=8, nchan=4))
+    with pytest.raises(ValueError, match="axes, but this cube has 3"):
+        fds.regrid_axis("FREQ", 1.4e9 + np.arange(4) * 1e6, np.ones((4, 8), dtype=np.float32))
+
+
+def test_regrid_axis_to_a_single_channel_keeps_the_old_width(config):
+    """One value defines no spacing, so CDELT has to come from the header."""
+    fds = FitsData(write_fits(config, npix=8, nchan=4, cdelt3=2e6))
+    fds.regrid_axis("FREQ", np.array([1.41e9]), np.ones((1, 8, 8), dtype=np.float32))
+    assert fds.nchan == 1
+    assert fds.header["CDELT3"] == 2e6
+    np.testing.assert_allclose(np.squeeze(fds.coords["FREQ"].data), [1.41e9], rtol=1e-12)
+
+
+def test_regrid_axis_handles_a_descending_axis(config):
+    """A negative CDELT runs the grid backwards; interpolation must cope."""
+    path = write_fits(config, npix=8, nchan=8, extra_hdus=(beam_hdu(8),), cdelt3=-1e6)
+    fds = FitsData(path)
+    old = np.squeeze(np.asarray(fds.coords["FREQ"].data))
+    new_grid = np.linspace(old[0], old[-1], 5)
+    fds.regrid_axis("FREQ", new_grid, np.ones((5, 8, 8), dtype=np.float32))
+
+    assert len(fds.beam_table) == 5
+    expected = np.interp(new_grid[::-1], old[::-1], np.linspace(0.4, 0.2, 8)[::-1])[::-1]
+    np.testing.assert_allclose(np.asarray(fds.beam_table["BMAJ"]), expected, rtol=1e-9)
+
+
+def test_regrid_axis_interpolates_the_beam_table(config):
+    path = write_fits(config, npix=8, nchan=8, extra_hdus=(beam_hdu(8, NCHAN=8),))
+    fds = FitsData(path)
+    old = np.squeeze(np.asarray(fds.coords["FREQ"].data))
+    new_grid = np.linspace(old[0], old[-1], 4)
+    fds.regrid_axis("FREQ", new_grid, np.ones((4, 8, 8), dtype=np.float32))
+
+    expected = np.interp(new_grid, old, np.linspace(0.4, 0.2, 8))
+    np.testing.assert_allclose(np.asarray(fds.beam_table["BMAJ"]), expected, rtol=1e-9)
+    np.testing.assert_array_equal(np.asarray(fds.beam_table["CHAN"]), [0, 1, 2, 3])
+    assert str(fds.beam_table["BMAJ"].unit) == "deg"
+
+    out = config.random_named_file(suffix=".fits")
+    fds.write_to_fits(out, overwrite=True)
+    with fits.open(out) as hdulist:
+        assert hdulist[1].header["NCHAN"] == 4
+    np.testing.assert_allclose(np.asarray(FitsData(out).beam_table["BMAJ"]), expected, rtol=1e-6)
+
+
+def test_regrid_axis_onto_a_grid_in_different_units(config):
+    """`values` are header units; `coords` come back in the units astropy reports.
+
+    astropy normalises a spectral coordinate to SI whatever CUNIT says, so a
+    beam interpolation that compared `values` against the coords grid would be
+    out by a factor of a million on this cube.
+    """
+    path = write_fits(config, npix=8, nchan=8, extra_hdus=(beam_hdu(8),))
+    fds = FitsData(path)
+    old_hz = np.squeeze(np.asarray(fds.coords["FREQ"].data))
+
+    new_mhz = np.linspace(old_hz[0], old_hz[-1], 4) / 1e6
+    fds.regrid_axis("FREQ", new_mhz, np.ones((4, 8, 8), dtype=np.float32), cunit="MHz")
+
+    assert fds.header["CUNIT3"] == "MHz"
+    np.testing.assert_allclose(fds.header["CRVAL3"], new_mhz[0], rtol=1e-12)
+    # Still SI on the way back out, so it agrees with the pre-regrid grid.
+    np.testing.assert_allclose(np.squeeze(fds.coords["FREQ"].data), new_mhz * 1e6, rtol=1e-9)
+
+    expected = np.interp(new_mhz * 1e6, old_hz, np.linspace(0.4, 0.2, 8))
+    np.testing.assert_allclose(np.asarray(fds.beam_table["BMAJ"]), expected, rtol=1e-9)
+
+
+def test_regrid_axis_leaves_a_whole_cube_beam_alone(config):
+    """A single-row table describes the cube, not its channels."""
+    path = write_fits(config, npix=8, nchan=1, extra_hdus=(beam_hdu(1),))
+    fds = FitsData(path)
+    assert len(fds.beam_table) == 1
+    fds.regrid_axis("FREQ", np.array([1.4e9, 1.401e9, 1.402e9]), np.ones((3, 8, 8), dtype=np.float32))
+    assert len(fds.beam_table) == 1
 
 
 # --------------------------------------------------------------------------- laziness

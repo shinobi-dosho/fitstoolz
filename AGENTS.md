@@ -85,6 +85,31 @@ that is the axis order a contiguous read follows. Callers who want a different
 shape — RA blocks, say — rechunk through `get_xds`; the reader does not try to
 guess the access pattern.
 
+## Beams: what the file recorded, not what we modelled
+
+`FitsData.beam_table` mixes two things, and only one of them may be written back.
+Beams read from a `BinTableHDU` are *data*: `beam_table_extname` records which
+extension they came from, and `write_to_fits` writes them back there. Beams read
+from `BMAJ`/`BMIN`/`BPA` keywords are already carried by the header copy, and
+`__register_beam_table` expanding a single one of those over frequency is a
+model of ours — emitting it as a table would promote that model to something the
+file claims to have measured. Hence the rule: write a beam extension only when
+`beam_table_extname` is set.
+
+Rows follow the data. A spectral `data_slice` cuts the table, `regrid_axis`
+interpolates it onto the new grid, and a `CHAN` column is renumbered against the
+output. A table that does not have one row per channel describes the cube as a
+whole and is left alone.
+
+## Regridding: header units in, SI out
+
+`regrid_axis` takes `values` in the axis' **header** units, because that is what
+`CRVAL`/`CDELT` are written in. `coords` does not report them back in those
+units — astropy normalises a spectral coordinate to SI whatever `CUNIT` says. So
+anything comparing an old grid to a new one (the beam interpolation) must read
+*both* off `coords`, never from `values`; mixing the two is a factor-of-`CUNIT`
+error that a cube already in Hz will not show you.
+
 ## Apps: one module, one pystep, four names
 
 Every module in `src/fitstoolz/apps/` follows the same shape, and the CLI relies

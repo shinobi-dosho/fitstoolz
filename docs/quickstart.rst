@@ -94,6 +94,40 @@ The write lands through a temporary file in the same directory and is renamed
 into place, so writing back over the file you opened is safe, and a write that
 fails part way leaves the previous contents alone. See :doc:`security`.
 
+A beam table that arrived as an extension of its own is written back beside the
+data, with its rows cut to match any ``data_slice``. Beams that came from
+``BMAJ``/``BMIN``/``BPA`` header keywords need no extension — the header already
+carries them, and ``FitsData`` expanding a single beam over frequency is a model
+of this package's rather than something the file recorded.
+
+Resampling an axis
+------------------
+
+``coords`` is an ``xarray.Coordinates``, so a grid of a different length cannot
+be assigned to it — xarray aligns, and raises. ``regrid_axis`` is the supported
+way to say "same cube, resampled": it takes the new grid and the new data
+together, so the two are never briefly inconsistent, and rebuilds the header and
+every coordinate from the resulting WCS.
+
+.. code-block:: python
+
+    freqs = resampled_frequencies                  # in the axis' header units
+    myfits.regrid_axis("FREQ", freqs, resampled)   # nchan may change
+    myfits.write_to_fits("regridded.fits", overwrite=True)
+
+A FITS axis is linear in ``CRVAL``/``CDELT``, so the values must be evenly
+spaced; an uneven grid is rejected rather than silently approximated. If the
+axis is the spectral one and the beams are per-channel, the beam table is
+interpolated onto the new grid.
+
+.. note::
+
+   The values you pass are in the axis' **header** units — the ``CUNIT`` it has,
+   or the ``cunit`` argument if you are changing it. Those are not necessarily
+   the units ``coords`` reports back: astropy normalises a spectral coordinate
+   to SI whatever ``CUNIT`` says, so a cube in MHz takes MHz here and returns Hz
+   there.
+
 From the command line
 ---------------------
 
