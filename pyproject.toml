@@ -7,7 +7,6 @@ authors = [
 ]
 maintainers = [
     {name="Mika Naidoo", email="mika.naidoo25@gmail.com"},
-    {name="Athanaseus Ramaila", email="armaila@sarao.ac.za"}
 ]
 license = "MIT"
 license-files = ["LICENSE"]
@@ -30,7 +29,7 @@ dependencies = [
     # 8.x API is stable.
     "click>=8.3.3",
     "pydantic>=2.6",
-    "stimela-ninja>=0.1.0b4",
+    "stimela-ninja>=0.1.0b5",
 ]
 
 # Dev-time override: pull stimela-ninja from its origin/main instead of the
@@ -39,7 +38,7 @@ dependencies = [
 # for publishing -- consumers still resolve the PyPI `stimela-ninja>=...`
 # constraint above.
 [tool.uv.sources]
-stimela-ninja = { url = "https://github.com/shinobi-dosho/stimela-ninja/archive/d5294749a7f2b74c506681da9de026b8ca76942c.tar.gz" }
+stimela-ninja = { git = "https://github.com/shinobi-dosho/stimela-ninja", branch = "main"}
 
 [build-system]
 requires = ["hatchling"]

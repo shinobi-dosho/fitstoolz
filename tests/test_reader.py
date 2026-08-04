@@ -3,6 +3,7 @@ axis manipulation, beam handling and the xarray/FITS round trip.
 """
 
 import logging
+import os
 import pickle
 from pathlib import Path
 
@@ -12,6 +13,7 @@ import pytest
 from astropy import units
 from astropy.io import fits
 from astropy.table import Table
+from astropy.wcs import WCS
 
 from fitstoolz import reader
 from fitstoolz.reader import FitsData
@@ -356,12 +358,23 @@ def test_write_to_fits_refuses_to_clobber_by_default(config):
         fds.write_to_fits(out)
 
 
+def staged_files(destination):
+    """The temporaries `write_to_fits` stages this destination through.
+
+    Matched against the destination rather than the whole directory: every test
+    here writes into the same directory, so a broader glob picks up other tests'
+    files.
+    """
+    destination = Path(destination)
+    return list(destination.parent.glob(f".{destination.name}.*.fitstoolz-tmp"))
+
+
 def test_write_to_fits_leaves_no_temporary_behind(config):
     """The write goes via a sibling temp file; it must not survive the call."""
     fds = FitsData(write_fits(config, npix=8, nchan=2))
     out = Path(config.random_named_file(suffix=".fits"))
     fds.write_to_fits(out, overwrite=True)
-    assert not list(out.parent.glob(".*fitstoolz-tmp"))
+    assert not staged_files(out)
 
 
 def test_failed_write_leaves_the_original_intact(config, monkeypatch):
@@ -381,7 +394,50 @@ def test_failed_write_leaves_the_original_intact(config, monkeypatch):
         fds.write_to_fits(path, overwrite=True)
 
     np.testing.assert_allclose(fits.getdata(path), data, rtol=1e-6)
-    assert not list(path.parent.glob(".*fitstoolz-tmp"))
+    assert not staged_files(path)
+
+
+def test_the_temporary_is_named_per_process(config):
+    """The rest of the name comes from the destination, so two writers would collide."""
+    staged = []
+    fds = FitsData(write_fits(config, npix=8, nchan=2))
+    out = Path(config.random_named_file(suffix=".fits"))
+
+    real_writeto = fits.HDUList.writeto
+
+    def spy(self, name, *args, **kwargs):
+        staged.append(Path(name).name)
+        return real_writeto(self, name, *args, **kwargs)
+
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setattr(fits.HDUList, "writeto", spy)
+        fds.write_to_fits(out, overwrite=True)
+
+    assert staged == [f".{out.name}.{os.getpid()}.fitstoolz-tmp"]
+
+
+def test_a_rename_that_fails_keeps_the_finished_output(config, monkeypatch):
+    """Losing the rename is no reason to throw away a write that succeeded."""
+    existing = np.random.default_rng(11).normal(size=(2, 8, 8)).astype(np.float32)
+    out = Path(write_fits(config, npix=8, nchan=2, data=existing))
+    fds = FitsData(write_fits(config, npix=8, nchan=2, data=np.ones((2, 8, 8), np.float32)))
+
+    def refuse(src, dst):
+        raise OSError("cross-device link")
+
+    monkeypatch.setattr(reader.os, "replace", refuse)
+    with pytest.raises(OSError, match="intact at"):
+        fds.write_to_fits(out, overwrite=True)
+
+    np.testing.assert_allclose(fits.getdata(out), existing, rtol=1e-6, err_msg="the destination is untouched")
+
+    staged = staged_files(out)
+    try:
+        assert len(staged) == 1, "the finished output should still be there"
+        np.testing.assert_allclose(fits.getdata(staged[0]), 1.0)
+    finally:
+        for leftover in staged:
+            leftover.unlink()
 
 
 @pytest.mark.filterwarnings("ignore::astropy.wcs.FITSFixedWarning")
@@ -467,6 +523,30 @@ def test_beam_rows_follow_a_spectral_slice(config):
     np.testing.assert_array_equal(np.asarray(reread.beam_table["CHAN"]), [0, 1, 2])
     with fits.open(out) as hdulist:
         assert hdulist[1].header["NCHAN"] == 3
+
+
+def test_beam_rows_follow_a_dropped_spectral_axis(config):
+    """`remove-axis --ctype FREQ` selects one channel; the table must follow it.
+
+    The cut used to be skipped whenever the spectral axis was absent from
+    ``coord_names`` -- which is exactly what dropping it does -- so a whole
+    per-channel table was written beside a single plane, as though all of those
+    beams described it.
+    """
+    path = write_fits(config, npix=8, nchan=8, extra_hdus=(beam_hdu(8, NCHAN=8),))
+    fds = FitsData(path)
+    out = config.random_named_file(suffix=".fits")
+    coord_names = [name for name in fds.coord_names if name != "FREQ"]
+    data_slice = [3, slice(None), slice(None)]
+    fds.write_to_fits(out, coord_names=coord_names, data_slice=data_slice, overwrite=True)
+
+    with fits.open(out) as hdulist:
+        assert hdulist[0].data.shape == (8, 8)
+        beams = Table.read(hdulist[1])
+        assert len(beams) == 1
+        np.testing.assert_allclose(np.asarray(beams["BMAJ"]), np.linspace(0.4, 0.2, 8)[3:4])
+        np.testing.assert_array_equal(np.asarray(beams["CHAN"]), [0])
+        assert hdulist[1].header["NCHAN"] == 1
 
 
 def test_header_keyword_beams_do_not_become_an_extension(config):
@@ -569,6 +649,33 @@ def test_beam_keywords_are_read_from_the_selected_hdu(config):
     assert fds.beam_table is not None
     np.testing.assert_allclose(np.asarray(fds.beam_table["BMAJ"]), [2e-3])
     assert fds.beam_table_extname is None, "header keywords are not an extension"
+
+
+def test_the_beam_table_after_the_image_wins(config):
+    """With several images and several beam tables, ordering is all there is to go on.
+
+    Scanning the file front to back regardless handed an image in extension 3 the
+    beams belonging to extension 1.
+    """
+    header = make_header(8, nchan=4)
+    path = config.random_named_file(suffix=".fits")
+    fits.HDUList(
+        [
+            fits.PrimaryHDU(),
+            fits.ImageHDU(np.zeros((4, 8, 8), np.float32), header=header, name="SCI1"),
+            beam_hdu(4, name="BEAMS1"),
+            fits.ImageHDU(np.zeros((4, 8, 8), np.float32), header=header, name="SCI2"),
+            fits.BinTableHDU(
+                Table({"BMAJ": np.full(4, 9.0), "BMIN": np.full(4, 9.0), "BPA": np.zeros(4)}),
+                name="BEAMS2",
+            ),
+        ]
+    ).writeto(path, overwrite=True)
+
+    assert FitsData(path, hdu=1).beam_table_extname == "BEAMS1"
+    second = FitsData(path, hdu=3)
+    assert second.beam_table_extname == "BEAMS2"
+    np.testing.assert_allclose(np.asarray(second.beam_table["BMAJ"]), 9.0)
 
 
 def test_writing_an_extension_out_lands_in_a_primary_hdu(config):
@@ -704,6 +811,129 @@ def test_to_unit_converts_or_passes_through():
     assert reader.to_unit(3.0, "", "Hz") == 3.0, "a unitless axis is ordinary, not an error"
     assert reader.to_unit(3.0, "Hz", None) == 3.0
     assert reader.to_unit(3.0, "Hz", "deg") == 3.0, "incompatible units pass through rather than raise"
+
+
+# --------------------------------------------------------------------------- the reference pixel
+
+
+def assert_wcs_follows_the_data(source, written, data_slice):
+    """Every written pixel must carry the world coordinates of the pixel it came from.
+
+    This is the property the whole CRPIX/CRVAL path exists to hold, and the one a
+    keyword-by-keyword comparison keeps missing: a slice renumbers the pixels, so
+    the keywords are *supposed* to differ.
+    """
+    with fits.open(source) as hdulist:
+        src_header, src_shape = hdulist[0].header, hdulist[0].data.shape
+    with fits.open(written) as hdulist:
+        out_header, out_shape = hdulist[0].header, hdulist[0].data.shape
+
+    resolved = [item.indices(length) for item, length in zip(data_slice, src_shape)]
+    starts = np.array([start for start, _, _ in resolved])
+    steps = np.array([step for _, _, step in resolved])
+
+    out_pixels = np.indices(out_shape).reshape(len(out_shape), -1).T
+    src_pixels = out_pixels * steps + starts
+
+    np.testing.assert_allclose(
+        WCS(out_header).wcs_pix2world(out_pixels[:, ::-1].astype(float), 0),
+        WCS(src_header).wcs_pix2world(src_pixels[:, ::-1].astype(float), 0),
+        atol=1e-12,
+    )
+
+
+@pytest.mark.parametrize(
+    "data_slice",
+    [
+        [slice(None), slice(None), slice(None)],
+        [slice(2, 5), slice(None), slice(None)],
+        [slice(6, None), slice(None), slice(None)],
+        [slice(-3, None), slice(None), slice(None)],
+        [slice(None, None, 2), slice(None), slice(None)],
+        [slice(None), slice(2, 6), slice(1, 7)],
+    ],
+)
+def test_a_slice_moves_the_reference_pixel_with_the_data(config, data_slice):
+    """`slice` wrote the unsliced reference, mislabelling every channel by start*CDELT.
+
+    The beam table was being cut by the same slice correctly, so the output
+    disagreed with itself about which channels it held.
+    """
+    path = write_fits(config, npix=8, nchan=8)
+    out = config.random_named_file(suffix=".fits")
+    FitsData(path).write_to_fits(out, data_slice=data_slice, overwrite=True)
+    assert_wcs_follows_the_data(path, out, data_slice)
+
+
+def test_a_strided_slice_widens_cdelt(config):
+    path = write_fits(config, npix=4, nchan=8)
+    out = config.random_named_file(suffix=".fits")
+    FitsData(path).write_to_fits(out, data_slice=[slice(None, None, 2), slice(None), slice(None)], overwrite=True)
+
+    header = fits.getheader(out)
+    assert header["NAXIS3"] == 4
+    np.testing.assert_allclose(header["CDELT3"], 2 * make_header(4, nchan=8)["CDELT3"])
+
+
+@pytest.mark.parametrize("crpix3", [-2, 0, 1, 5, 40])
+def test_a_reference_pixel_outside_the_data_round_trips(config, crpix3):
+    """CRPIX need not land inside the array: cutouts and mosaic facets put it outside.
+
+    CRVAL was read out of the coordinate grid by indexing it with CRPIX, which
+    raised IndexError above the array and wrapped round to the far end below it.
+    """
+    header = make_header(4, nchan=4)
+    header["CRPIX3"] = crpix3
+    path = config.random_named_file(suffix=".fits")
+    fits.PrimaryHDU(np.zeros((4, 4, 4), np.float32), header=header).writeto(path, overwrite=True)
+
+    out = config.random_named_file(suffix=".fits")
+    FitsData(path).write_to_fits(out, overwrite=True)
+    assert_wcs_follows_the_data(path, out, [slice(None)] * 3)
+
+
+def test_a_reference_pixel_outside_the_data_still_scales_a_header_beam(config):
+    """The single-beam expansion indexed the grid by CRPIX too, so the file would not open."""
+    header = make_header(4, nchan=4)
+    header["CRPIX3"] = 40
+    header["BMAJ"], header["BMIN"], header["BPA"] = 1e-3, 5e-4, 0.0
+    path = config.random_named_file(suffix=".fits")
+    fits.PrimaryHDU(np.zeros((4, 4, 4), np.float32), header=header).writeto(path, overwrite=True)
+
+    fds = FitsData(path)
+    freqs = np.squeeze(np.asarray(fds.coords["FREQ"].data))
+    # The reference frequency is extrapolated to pixel 39, well past the 4 channels.
+    ref_freq = freqs[0] + (freqs[1] - freqs[0]) * 39
+    np.testing.assert_allclose(np.asarray(fds.beam_table["BMAJ"]), 1e-3 * ref_freq / freqs, rtol=1e-9)
+
+
+def test_a_half_pixel_reference_is_not_snapped_to_a_whole_one(config):
+    """CRPIX 32.5 is what an image phase-centred between pixels carries.
+
+    `int(CRPIX) - 1` moved the reference onto its neighbour, and the write put
+    that back on disk.
+    """
+    header = make_header(8, nchan=2)
+    header["CRPIX1"] = header["CRPIX2"] = 4.5
+    path = config.random_named_file(suffix=".fits")
+    fits.PrimaryHDU(np.zeros((2, 8, 8), np.float32), header=header).writeto(path, overwrite=True)
+
+    fds = FitsData(path)
+    assert fds.coords["RA"].ref_pixel == 3.5
+
+    out = config.random_named_file(suffix=".fits")
+    fds.write_to_fits(out, overwrite=True)
+    written = fits.getheader(out)
+    assert written["CRPIX1"] == 4.5
+    np.testing.assert_allclose(written["CRVAL1"], RA0, rtol=1e-12)
+    assert_wcs_follows_the_data(path, out, [slice(None)] * 3)
+
+
+def test_a_whole_reference_pixel_stays_an_integer(config):
+    """`ref_pixel` is still usable as an index when CRPIX is a whole pixel."""
+    fds = FitsData(write_fits(config, npix=8, nchan=4))
+    assert isinstance(fds.coords["FREQ"].ref_pixel, int)
+    assert isinstance(fds.coords["RA"].ref_pixel, int)
 
 
 # --------------------------------------------------------------------------- regrid_axis
@@ -903,6 +1133,31 @@ def test_lazy_read_matches_the_file_including_scaled_data(config):
     fds = FitsData(path)
     assert fds.data.dtype == expected.dtype
     np.testing.assert_allclose(np.asarray(fds.data), expected, rtol=1e-6)
+
+
+def test_a_scaled_image_opens_at_the_default_memmap(config):
+    """astropy will not scale a memory-mapped image, so opening one used to raise.
+
+    `FitsData(path)` defaults to memmap=True and the dtype sniff went through
+    that handle, so a BSCALE/BZERO cube could not be opened at all -- only
+    `memmap=False` worked, which nothing said.
+    """
+    raw = np.arange(2 * 8 * 8, dtype=np.int16).reshape(2, 8, 8)
+    header = make_header(8, nchan=2)
+    header["BZERO"], header["BSCALE"] = 100.0, 0.5
+    path = config.random_named_file(suffix=".fits")
+    fits.PrimaryHDU(raw, header=header).writeto(path, overwrite=True)
+
+    expected = fits.getdata(path)
+    with FitsData(path) as fds:  # memmap=True, the default
+        np.testing.assert_allclose(np.asarray(fds.data), expected, rtol=1e-6)
+        # `get_data` reads through the handle rather than the graph, so it has to
+        # have been reopened rather than merely worked around.
+        np.testing.assert_allclose(np.asarray(fds.get_data()), expected, rtol=1e-6)
+
+    out = config.random_named_file(suffix=".fits")
+    FitsData(path).write_to_fits(out, overwrite=True)
+    np.testing.assert_allclose(fits.getdata(out), expected, rtol=1e-6)
 
 
 def test_graph_survives_closing_the_file(config):

@@ -33,8 +33,10 @@ write it the same way rather than inventing a local variant.
 Two related conventions:
 
 - **`CRPIX` is 1-based on disk, 0-based in memory.** Every read subtracts one
-  (`ref_pixel`), every write adds it back (`crpix + 1`). Both directions live in
-  `set_coord_attrs` and `write_to_fits`; keep them there.
+  (`ref_pixel`), every write adds it back. Both directions live in
+  `set_coord_attrs` and `write_to_fits`; keep them there. It is *not* an index:
+  it may be fractional, and a cutout or a mosaic facet may put it outside the
+  array entirely — see "The reference pixel is not an index" below.
 - **`coord_names` are FITS axis names; `dims` are xarray dimension labels.**
   They are not the same vocabulary — `"RA"` is a coord name, `"celestial.ra"` is
   its dim. Anything user-facing accepts coord names and translates
@@ -101,6 +103,18 @@ interpolates it onto the new grid, and a `CHAN` column is renumbered against the
 output. A table that does not have one row per channel describes the cube as a
 whole and is left alone.
 
+"Follow the data" includes the case where the spectral axis stops existing.
+`remove-axis --ctype FREQ` selects one channel by integer index and drops the
+axis from `coord_names`, and `__output_beam_hdu` used to condition its cut on
+`spectral in coord_names` — false exactly then, so the whole per-channel table
+was written beside a single plane. Condition on the *table*, not on the output
+axes: if it has one row per input channel, the selection applies to it.
+
+Which beam table belongs to which image is not something FITS records, so
+`get_beam_table` takes the first one *after* the image HDU and only then falls
+back to one before it. Front-to-back regardless handed `FitsData(f, hdu=3)` the
+beams belonging to extension 1.
+
 ## Two unit systems, and the line between them
 
 This is the single richest source of bugs in the package, because every one of
@@ -121,14 +135,46 @@ Three separate bugs came from doing exactly that, and all three shipped:
   in world units, so stacking two MHz cubes appended channels 1 Hz apart and
   piled them on top of each other.
 - `write_to_fits` wrote `CUNIT` from `world_axis_units` while `CDELT` came from
-  the header, describing an MHz cube as a Hz one with its MHz channel width.
-  `to_unit` now converts `CRVAL` into whichever unit `CUNIT` claims.
+  the header, describing an MHz cube as a Hz one with its MHz channel width. It
+  now takes `CTYPE`/`CDELT`/`CRVAL`/`CRPIX`/`CUNIT` all off the input header, so
+  they are all in one system and none of them needs converting.
 - `regrid_axis` takes `values` in header units, so its beam interpolation reads
   *both* grids off `coords` rather than comparing against `values`.
 
 When you need a spacing, prefer differencing the coordinate grid over reading
 `CDELT`: it is in the same system as everything else you are holding. When you
-write a header, convert explicitly and say which way you are going.
+write a header, convert explicitly and say which way you are going —
+`reader.to_unit` converts between two FITS unit strings and passes through
+anything that is not a convertible pair, which is the ordinary case for STOKES
+and for headers with no `CUNIT`.
+
+## The reference pixel is not an index
+
+`CRPIX` is a coordinate, not a subscript. Two things follow, and getting either
+wrong is silent:
+
+- **It may be fractional.** An image phase-centred between pixels carries
+  `CRPIX = 32.5`. `int(CRPIX) - 1` snapped that onto its neighbour and the write
+  put the snapped value back on disk, so `ref_pixel` keeps the fraction and is
+  an `int` only when the reference really is a whole pixel.
+- **It may be outside the array.** A cutout or a mosaic facet keeps the parent's
+  reference, which is routinely off the edge — `CRPIX3 = 40` on a four-channel
+  cube is a valid header. `coords[name].data[crpix]` therefore raised
+  `IndexError` above the array and wrapped round to the far end below it, in
+  `write_to_fits` (so the cube could not be written) and in
+  `__register_beam_table` (so it could not even be *opened*).
+
+So: never index a coordinate grid by a reference pixel. `write_to_fits` reads
+`CRVAL` off the header, and `__reference_frequency` steps along the grid, which
+extrapolates and takes a fraction.
+
+And when the data is sliced, the *pixel* moves but the reference does not:
+`CRPIX` is renumbered by the slice's start and step, `CRVAL` is left alone. That
+is exact for a projection too, where re-referencing would move the tangent
+point. `assert_wcs_follows_the_data` in `tests/test_reader.py` is the property
+worth testing — every written pixel carries the world coordinates of the pixel
+it came from — rather than comparing keywords, which a slice is *supposed* to
+change.
 
 ## One lazy constructor
 

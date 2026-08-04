@@ -73,7 +73,14 @@ def lazy_data(fname, hdu, hdu_index=0):
     # Ask the file for one element rather than deriving the dtype from BITPIX:
     # `section` applies BSCALE/BZERO, so a scaled integer image reports the
     # float dtype its blocks will really carry.
-    dtype = hdu.section[tuple(slice(0, 1) for _ in shape)].dtype
+    #
+    # The sniff goes through a handle of our own, not through `hdu`, because
+    # astropy refuses to scale a memory-mapped image ("Cannot load a
+    # memory-mapped image: BZERO/BSCALE/BLANK header keywords present"). Reading
+    # it here the same way `read_block` will means how the caller opened the file
+    # cannot decide whether a scaled image is readable at all.
+    with open_fits(fname, memmap=False) as hdulist:
+        dtype = hdulist[hdu_index].section[tuple(slice(0, 1) for _ in shape)].dtype
 
     return da.map_blocks(
         read_block,
@@ -83,6 +90,29 @@ def lazy_data(fname, hdu, hdu_index=0):
         chunks=normalize_chunks(contiguous_chunks(shape, dtype), shape=shape, dtype=dtype),
         meta=np.empty((), dtype=dtype),
     )
+
+
+def _slice_offset(selection, length):
+    """Where a slice starts along an axis, and how far it steps.
+
+    Both are needed to move a FITS reference pixel onto a sliced axis: the pixel
+    numbering restarts at ``start`` and advances ``step`` at a time.
+
+    Anything that is not a slice -- an integer index, which drops the axis
+    entirely rather than shortening it -- leaves the axis alone.
+
+    Args:
+        selection: One element of a ``data_slice``, or None.
+        length (int): Length of the axis being sliced, for resolving negative
+            and open-ended bounds.
+
+    Returns:
+        tuple: ``(start, step)``.
+    """
+    if isinstance(selection, slice):
+        start, _, step = selection.indices(length)
+        return start, step
+    return 0, 1
 
 
 def to_unit(value, from_unit, to_unit_):
@@ -109,6 +139,18 @@ class FitsData:
         # -- an MEF, or one with a compressed image in an extension -- is
         # addressed the same way as one where it is.
         self.hdu_index = hdu
+
+        # astropy will not hand back scaled values from a memory-mapped image,
+        # because they are computed rather than the bytes on disk: `.data` and
+        # `.section` both raise "Cannot load a memory-mapped image". Reopening
+        # without the map is what its own message asks for, and it is what makes
+        # a BSCALE/BZERO image openable at the default `memmap=True` at all. It
+        # costs nothing on the lazy path either -- `read_block` passes
+        # `memmap=False` regardless -- so only `get_data` pays for it.
+        if memmap and self.__is_scaled(self.hdulist[hdu].header):
+            self.hdulist.close()
+            self.hdulist = open_fits(self.fname, memmap=False)
+
         self.phdu = self.hdulist[hdu]
         self.header = self.phdu.header
         self.wcs = WCS(self.header)
@@ -132,6 +174,11 @@ class FitsData:
 
         self.__register_dimensions()
         self.__register_beam_table()
+
+    @staticmethod
+    def __is_scaled(header) -> bool:
+        """Whether reading this HDU means applying BSCALE/BZERO/BLANK."""
+        return header.get("BSCALE", 1) != 1 or header.get("BZERO", 0) != 0 or "BLANK" in header
 
     def coord_index(self, name: str) -> int:
         """
@@ -179,11 +226,17 @@ class FitsData:
             name (str): Name (or label) of coordinate to set
         """
         idx = self.coord_index(name)
+        # FITS indexing is 1-based. Keep the fraction: `int(CRPIX) - 1` snapped a
+        # half-pixel reference -- CRPIX 32.5, which is what an even-sized image
+        # phase-centred between pixels carries -- onto its neighbour, and the
+        # write put that back on disk. Whole references stay ints so that
+        # `ref_pixel` remains usable as an index where one is wanted.
+        ref_pixel = float(self.header[f"CRPIX{self.ndim - idx}"]) - 1
         self.coords[name].attrs = {
             "name": name,
             "pixel_size": self.header[f"CDELT{self.ndim - idx}"],
             "dim": dim,
-            "ref_pixel": int(self.header[f"CRPIX{self.ndim - idx}"]) - 1,  # FITS indexing is 1-based
+            "ref_pixel": int(ref_pixel) if ref_pixel.is_integer() else ref_pixel,
             "units": self.wcs.world_axis_units[::-1][idx],
             "size": self.dshape[idx],
         }
@@ -314,6 +367,19 @@ class FitsData:
         self.coords[dec_dim] = ("celestial.dec",), dec_grid
         self.set_coord_attrs(dec_dim, "celestial.dec")
 
+    def __to_frequency(self, velocities, convention, rest_freq_Hz=None):
+        """Velocities in m/s to frequencies in Hz, under the given Doppler convention.
+
+        Takes the values rather than reading a coordinate, so the reference pixel
+        -- which need not be one of them -- can be converted the same way.
+        """
+        rest_freq_Hz = rest_freq_Hz or self.spectral_restfreq
+        return (
+            SpectralCoord(velocities, unit=units.meter / units.second)
+            .to(units.Hz, doppler_rest=rest_freq_Hz * units.Hz, doppler_convention=convention)
+            .value
+        )
+
     def get_freq_from_vrad(self, rest_freq_Hz=None):
         """
         Convert radio velocity coordinates to frequencies
@@ -321,12 +387,7 @@ class FitsData:
         Returns:
             astropy.SpectralCoord: Astropy SpectralCoord instance
         """
-        rest_freq_Hz = rest_freq_Hz or self.spectral_restfreq
-        return (
-            SpectralCoord(self.coords["VRAD"], unit=units.meter / units.second)
-            .to(units.Hz, doppler_rest=rest_freq_Hz * units.Hz, doppler_convention="radio")
-            .value
-        )
+        return self.__to_frequency(self.coords["VRAD"], "radio", rest_freq_Hz)
 
     def get_freq_from_vopt(self, rest_freq_Hz=None):
         """
@@ -335,12 +396,7 @@ class FitsData:
         Returns:
             astropy.SpectralCoord: Astropy SpectralCoord instance
         """
-        rest_freq_Hz = rest_freq_Hz or self.spectral_restfreq
-        return (
-            SpectralCoord(self.coords["VOPT"], unit=units.meter / units.second)
-            .to(units.Hz, doppler_rest=rest_freq_Hz * units.Hz, doppler_convention="optical")
-            .value
-        )
+        return self.__to_frequency(self.coords["VOPT"], "optical", rest_freq_Hz)
 
     def add_axis(self, name: str, idx: int, crval: float, cdelt: float, crpix: int, cunit: str):
         """Add a new axis to FITS data
@@ -483,6 +539,30 @@ class FitsData:
                 beam_table = get_beam_table(fname, hdu=self.hdu_index)
             self.expand_along_axis(name, data, beam_table)
 
+    def __reference_frequency(self):
+        """Frequency at the spectral reference pixel, whether or not it is a pixel.
+
+        This used to be ``freqs[self.spectral_refpix]``, which needs CRPIX to land
+        on a whole pixel *inside* the cube. A reference pixel outside the data is
+        ordinary in a cutout or a mosaic facet, and indexing raised ``IndexError``
+        above the array -- so such a file could not be opened at all -- and
+        wrapped round to the last channel below it. A FITS axis is linear in the
+        world units astropy reports, so the reference is stepped along the grid
+        instead, which extrapolates and takes a fraction.
+        """
+        grid = self.__coord_values(self.spectral_coord)
+        refpix = self.coords[self.spectral_coord].ref_pixel
+        if grid.size < 2:
+            reference = float(grid[0])
+        else:
+            reference = float(grid[0] + (grid[1] - grid[0]) * refpix)
+
+        if self.spectral_coord == "VRAD":
+            return float(self.__to_frequency(reference, "radio"))
+        if self.spectral_coord == "VOPT":
+            return float(self.__to_frequency(reference, "optical"))
+        return reference
+
     def __register_beam_table(self):
         beam_table = get_beam_table(self.fname, hdu=self.hdu_index)
         if beam_table is False:
@@ -506,11 +586,12 @@ class FitsData:
                 freqs = self.get_freq_from_vopt()
             else:
                 freqs = self.coords["FREQ"].data
+            ref_freq = self.__reference_frequency()
             new_table = {}
             for col in beam_table.colnames:
                 col_data = np.zeros(self.nchan, dtype=beam_table[col].dtype)
                 for chan in range(self.nchan):
-                    scale_factor = freqs[self.spectral_refpix] / freqs[chan]
+                    scale_factor = ref_freq / freqs[chan]
                     if col.lower() in ["bmaj", "bmin"]:
                         col_data[chan] = beam_table[col][0] * scale_factor
                     elif col.lower() == "chan":
@@ -535,7 +616,10 @@ class FitsData:
 
         Rows follow the data: a spectral ``data_slice`` cuts the table to the
         channels being written, and a ``CHAN`` column is renumbered against the
-        output rather than left pointing at the input's channels.
+        output rather than left pointing at the input's channels. Selecting a
+        single channel by integer index -- which is what ``remove-axis`` does,
+        and which drops the axis from ``coord_names`` -- cuts the table to that
+        one row.
 
         Args:
             coord_names (list): Output coordinate order, python convention.
@@ -550,12 +634,22 @@ class FitsData:
         beams = self.beam_table
         spectral = self.spectral_coord
 
-        if spectral is not None and spectral in coord_names and data_slice:
+        # Note there is no `spectral in coord_names` condition here. That is
+        # false in exactly the case that needs cutting hardest -- `remove-axis
+        # --ctype FREQ` selects one channel and drops the axis -- and skipping
+        # the cut wrote the whole per-channel table beside a single plane, as
+        # though all of those beams described it.
+        if spectral is not None and data_slice:
             idx = self.coord_index(spectral)
+            selection = data_slice[idx] if idx < len(data_slice) else None
             # Only a per-channel table tracks the spectral axis; a single beam
             # describes the whole cube however it is sliced.
-            if len(beams) == self.dshape[idx] and isinstance(data_slice[idx], slice):
-                beams = beams[data_slice[idx]]
+            if len(beams) == self.dshape[idx]:
+                if isinstance(selection, slice):
+                    beams = beams[selection]
+                elif isinstance(selection, (int, np.integer)):
+                    chan = int(selection) % self.dshape[idx]
+                    beams = beams[chan : chan + 1]
 
         if beams is not self.beam_table:
             beams = beams.copy()
@@ -804,26 +898,42 @@ class FitsData:
             orig_idx = self.coord_index(coord)
 
             orig_axis = self.ndim - orig_idx
-            cdelt = self.coords[coord].pixel_size
-            crpix = self.coords[coord].ref_pixel
             ctype = self.header.get(f"CTYPE{orig_axis}", coord)
 
-            # CDELT is the input header's, so it is in the input's units, and
-            # CUNIT has to say so. The coordinate grid is not in those units --
-            # astropy reports a spectral axis in SI whatever CUNIT said -- so
-            # CRVAL is converted back before it is written. Taking CUNIT from the
-            # grid instead, as this did, described a cube in MHz as one in Hz
-            # while leaving CDELT at its MHz value: a channel width a million
-            # times too narrow, and no round trip.
+            # All four of these come off the input header, so all four are in the
+            # same (header) unit system and none of them needs converting. Every
+            # in-memory operation that moves an axis -- `add_axis`, `regrid_axis`
+            # -- rewrites those keywords as it goes, and `expand_along_axis`
+            # appends past the end, which leaves the reference where it was.
+            #
+            # Reading CRVAL back off the coordinate grid instead, which is what
+            # this did, was wrong twice over. The grid is in world units, needing
+            # a conversion that only papered over the mismatch. And it was indexed
+            # by CRPIX, which assumes the reference pixel is a whole pixel inside
+            # the data: a mosaic facet or a cutout is under no obligation to keep
+            # it there, and above the array that raised IndexError while below it
+            # silently wrapped round to the far end of the axis.
+            cdelt = float(self.header[f"CDELT{orig_axis}"])
+            crval = float(self.header.get(f"CRVAL{orig_axis}", 0.0))
+            crpix = float(self.header.get(f"CRPIX{orig_axis}", 1.0))
             cunit = self.header.get(f"CUNIT{orig_axis}") or self.coords[coord].units
-            crval = float(da.compute(self.coords[coord].data[crpix])[0])
-            crval = to_unit(crval, self.coords[coord].units, cunit)
+
+            # A slice renumbers the pixels, so the reference pixel moves even
+            # though the reference itself does not: CRVAL is the world value *at*
+            # the reference, and cutting channels off the front does not change
+            # it. Ignoring `data_slice` here is what made `slice` write a cube
+            # whose channels were all mislabelled by `start * CDELT` -- while its
+            # beam table, cut by the same slice, said something different.
+            selection = data_slice[orig_idx] if orig_idx < len(data_slice) else None
+            start, step = _slice_offset(selection, self.dshape[orig_idx])
+            crpix = (crpix - 1 - start) / step + 1
+            cdelt = cdelt * step
 
             header.update(
                 {
                     f"CTYPE{idx}": ctype,
                     f"CDELT{idx}": cdelt,
-                    f"CRPIX{idx}": crpix + 1,
+                    f"CRPIX{idx}": int(crpix) if float(crpix).is_integer() else crpix,
                     f"CUNIT{idx}": cunit,
                     f"CRVAL{idx}": crval,
                 }
@@ -846,13 +956,27 @@ class FitsData:
         # for -- would otherwise truncate the file the blocks are still being
         # read from. The rename is atomic, so a write that dies part way also no
         # longer destroys whatever was there before.
-        tmpname = fname.with_name(f".{fname.name}.fitstoolz-tmp")
+        #
+        # The pid is in the name because the rest of it is derived from the
+        # destination: two processes writing the same output would otherwise
+        # stage through one temporary and interleave in it.
+        tmpname = fname.with_name(f".{fname.name}.{os.getpid()}.fitstoolz-tmp")
         try:
             hdulist.writeto(tmpname, overwrite=True)
-            os.replace(tmpname, fname)
-        finally:
+        except BaseException:
             if tmpname.exists():
                 tmpname.unlink()
+            raise
+
+        try:
+            os.replace(tmpname, fname)
+        except OSError as error:
+            # Don't discard a write that succeeded just because the rename did
+            # not. The destination is untouched either way; say where the
+            # finished file is rather than deleting it and reporting a bare errno.
+            raise OSError(
+                f"Wrote '{fname}' but could not move it into place: {error}. The output is intact at '{tmpname}'."
+            ) from error
 
     def __enter__(self):
         return self

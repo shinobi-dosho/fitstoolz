@@ -8,6 +8,82 @@ major version is zero, a minor bump may carry breaking changes.
 
 ## [Unreleased]
 
+## [0.2.2] — 2026-08-04
+
+A review of everything since 0.2.0 found six defects, all silent or crashing.
+Three of them are about the same misconception — that `CRPIX` is an index into
+the coordinate grid — and one is a regression from the beam preservation added
+in 0.2.0.
+
+### Fixed
+
+- **`slice` no longer mislabels every channel it writes.** `write_to_fits` built
+  `CRPIX`/`CRVAL` from the *unsliced* coordinates, so slicing channels 2–5 of a
+  1 GHz / 1 MHz cube produced a file whose header said its first channel was
+  1.000 GHz when it was 1.002 GHz — every pixel off by `start * CDELT`, on the
+  spatial axes as much as the spectral one. Since 0.2.0 the beam table *was*
+  being cut correctly by the same slice, so the output disagreed with itself
+  about which channels it held.
+
+  A slice renumbers the pixels but does not move the reference: `CRPIX` is now
+  shifted by the slice's start and step and `CDELT` scaled by the step, while
+  `CRVAL` is left alone. That is exact under a projection too, where
+  re-referencing to the slice's first pixel would move the tangent point.
+
+- **A `CRPIX` outside the data no longer crashes the write, or the read.** Both
+  `write_to_fits` and the single-beam frequency scaling in
+  `__register_beam_table` indexed the coordinate grid by `CRPIX - 1`. A cutout
+  or a mosaic facet keeps its parent's reference, which is routinely off the
+  edge: above the array that raised `IndexError` — and with a `BMAJ` header
+  keyword present, at *construction*, so the file could not be opened at all —
+  while below it, it silently wrapped round and wrote a `CRVAL` a whole axis
+  length out. `CRVAL` now comes off the input header and the reference frequency
+  is extrapolated along the grid.
+
+- **A half-pixel reference is no longer snapped to a whole one.** `ref_pixel`
+  was `int(CRPIX) - 1`, so an image phase-centred between pixels — `CRPIX =
+  32.5`, ordinary for an even-sized image — came back as 32 and was written back
+  out that way. It keeps the fraction now, and stays an `int` when the reference
+  really is a whole pixel.
+
+- **`remove-axis` on the spectral axis no longer writes a whole per-channel beam
+  table beside a single plane.** `__output_beam_hdu` conditioned its row cut on
+  the spectral axis being present in the output, which is false in exactly the
+  case that needs cutting hardest: `remove-axis --ctype FREQ` selects one channel
+  by integer index and drops the axis. An eight-channel cube came back as a 2-D
+  image with all eight beams attached, as though each of them described it. A
+  regression from the beam preservation added in 0.2.0, which before that wrote
+  no table at all. The cut now keys off the table having one row per input
+  channel, and an integer selection takes that one row.
+
+- **A scaled integer image opens at the default `memmap=True`.** astropy will not
+  hand back `BSCALE`/`BZERO` values from a memory-mapped image, and the dtype
+  sniff in `lazy_data` went through the caller's handle, so a scaled cube raised
+  `ValueError: Cannot load a memory-mapped image` on construction. Only
+  `memmap=False` worked, and nothing said so. The sniff now uses a handle of its
+  own — the same way `read_block` reads — and `FitsData` drops the memory map for
+  a scaled image, which is what astropy's own error message asks for.
+
+- **An image in an extension gets its own beams.** `get_beam_table` scanned the
+  file front to back and took the first beam table it found, so in a file with
+  several images and several tables — which is the point of the `hdu=` argument
+  added in 0.2.1 — `FitsData(f, hdu=3)` was handed extension 1's beams. It now
+  prefers the first table *after* the image and only then falls back to one
+  before it. Unchanged for an image in the primary HDU.
+
+- **A failed rename no longer throws away the write it failed to move.** The
+  staging temporary was deleted in a `finally`, so if `os.replace` was what
+  failed the finished output went with it. It is kept and named in the error
+  now. The temporary also carries the writing process's pid, so two processes
+  writing one destination no longer interleave in a single staging file.
+
+### Changed
+
+- `write_to_fits` takes `CTYPE`, `CDELT`, `CRVAL`, `CRPIX` and `CUNIT` from the
+  input header rather than re-deriving two of them from the coordinate grid.
+  They are all in one unit system that way, so the conversion 0.2.0 added is no
+  longer needed on this path; `reader.to_unit` remains as a utility.
+
 ## [0.2.1] — 2026-08-03
 
 ### Added

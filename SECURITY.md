@@ -115,11 +115,13 @@ given (in which case the destination *is* the input file, edited in place). With
 neither, the app raises rather than guessing — so overwriting is always
 something the caller asked for by name.
 
-Writes are staged through a `.<name>.fitstoolz-tmp` file in the destination
+Writes are staged through a `.<name>.<pid>.fitstoolz-tmp` file in the destination
 directory and renamed into place. That makes the replacement atomic: a write
 that fails part way leaves the previous file intact rather than a truncated one.
 It also means the destination briefly needs room for both copies, and that a
-crash can leave the temporary behind.
+crash can leave the temporary behind. The pid is in the name so that two
+processes writing the same destination do not interleave in one staging file;
+they still race for the destination itself, and the last rename wins.
 
 `stack` and `stats` are the exceptions to the shape, not the rule: `stack`
 requires `--stacked-fits`, and `stats` writes nothing at all.

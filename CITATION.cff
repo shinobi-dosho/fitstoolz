@@ -17,7 +17,7 @@ authors:
   - family-names: "Ramaila"
     given-names: "Athanaseus"
     email: "armaila@sarao.ac.za"
-version: "0.2.1"
+version: "0.2.2"
 license: MIT
 repository-code: "https://github.com/shinobi-dosho/fitstoolz"
 url: "https://fitstoolz.readthedocs.io"

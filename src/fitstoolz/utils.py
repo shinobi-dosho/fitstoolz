@@ -126,9 +126,9 @@ def get_beam_table(fname: Path, hdu: int = 0):
 
     Args:
         fname (Path): FITS file to read.
-        hdu (int): Index of the image HDU whose header carries the
-            ``BMAJ``/``BMIN``/``BPA`` fallback. A beam *extension* is looked for
-            across the whole file regardless, since it is an HDU of its own.
+        hdu (int): Index of the image HDU the beams belong to. Its header carries
+            the ``BMAJ``/``BMIN``/``BPA`` fallback, and it decides which beam
+            *extension* is preferred when the file holds more than one.
 
     Returns:
         astropy.table.Table|bool: The beams, or False if the file records none.
@@ -144,21 +144,31 @@ def get_beam_table(fname: Path, hdu: int = 0):
     }
 
     beam_table = None
-    # accept the first beam table in hdulist
     with open_fits(fname) as hdulist:
         header = hdulist[hdu].header
-        for hdu in hdulist:
-            if isinstance(hdu, fits.BinTableHDU):
-                tab = Table.read(hdu)
-                if {"BMAJ", "BMIN", "BPA"}.issubset(tab.colnames):
-                    # Record which extension it came from. This is the flag that
-                    # tells a writer the beams live in an HDU of their own rather
-                    # than in BMAJ/BMIN/BPA header keywords -- and so whether
-                    # writing an HDU back preserves the input or invents an
-                    # extension the input never had.
-                    tab.meta.setdefault("EXTNAME", hdu.name or "BEAMS")
-                    beam_table = tab
-                    break
+
+        # Take the first beam table that follows the image, and only then fall
+        # back to one before it. FITS records no link between an image and its
+        # beams, so with several of each in one file the ordering is all there
+        # is to go on -- and it is the convention every writer we have seen
+        # follows. Scanning front to back regardless, which is what this did,
+        # handed `FitsData(f, hdu=3)` the beams belonging to extension 1. For an
+        # image in the primary HDU the two orders are the same.
+        search_order = [*range(hdu + 1, len(hdulist)), *range(0, hdu + 1)]
+        for index in search_order:
+            candidate = hdulist[index]
+            if not isinstance(candidate, fits.BinTableHDU):
+                continue
+            tab = Table.read(candidate)
+            if {"BMAJ", "BMIN", "BPA"}.issubset(tab.colnames):
+                # Record which extension it came from. This is the flag that
+                # tells a writer the beams live in an HDU of their own rather
+                # than in BMAJ/BMIN/BPA header keywords -- and so whether
+                # writing an HDU back preserves the input or invents an
+                # extension the input never had.
+                tab.meta.setdefault("EXTNAME", candidate.name or "BEAMS")
+                beam_table = tab
+                break
 
     if isinstance(beam_table, Table):
         return beam_table

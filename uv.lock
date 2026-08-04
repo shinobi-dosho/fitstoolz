@@ -675,7 +675,7 @@ requires-dist = [
     { name = "dask", extras = ["array"], specifier = ">=2023.1.1" },
     { name = "numpy", specifier = ">=2.0" },
     { name = "pydantic", specifier = ">=2.6" },
-    { name = "stimela-ninja", url = "https://github.com/shinobi-dosho/stimela-ninja/archive/d5294749a7f2b74c506681da9de026b8ca76942c.tar.gz" },
+    { name = "stimela-ninja", git = "https://github.com/shinobi-dosho/stimela-ninja?branch=main" },
     { name = "xarray", specifier = ">=2023.1.0" },
 ]
 
@@ -2693,8 +2693,8 @@ wheels = [
 
 [[package]]
 name = "stimela-ninja"
-version = "0.1.0b4"
-source = { url = "https://github.com/shinobi-dosho/stimela-ninja/archive/d5294749a7f2b74c506681da9de026b8ca76942c.tar.gz" }
+version = "0.1.0b5"
+source = { git = "https://github.com/shinobi-dosho/stimela-ninja?branch=main#85fcf8afa9864472f5f01b705240460097f5dc89" }
 dependencies = [
     { name = "click" },
     { name = "packaging" },
@@ -2702,17 +2702,6 @@ dependencies = [
     { name = "pydantic-settings" },
     { name = "pyyaml" },
     { name = "rich" },
-]
-sdist = { hash = "sha256:87cd3115821eaa2850db9f9357677ce605e8e2dc20275531a7ff0d2e0950a159" }
-
-[package.metadata]
-requires-dist = [
-    { name = "click", specifier = ">=8.1" },
-    { name = "packaging", specifier = ">=23" },
-    { name = "pydantic", specifier = ">=2.6" },
-    { name = "pydantic-settings", specifier = ">=2.2" },
-    { name = "pyyaml", specifier = ">=6.0" },
-    { name = "rich", specifier = ">=13.7" },
 ]
 
 [[package]]

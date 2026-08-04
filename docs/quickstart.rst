@@ -50,6 +50,11 @@ approximation:
     myfits.coords["RA"].attrs         # {'name', 'pixel_size', 'dim', 'ref_pixel', 'units', 'size'}
     myfits.coords["RA"].ref_pixel     # 0-based, unlike the CRPIX on disk
 
+``ref_pixel`` is a coordinate, not a subscript: it is a float when ``CRPIX`` is
+(an image phase-centred between pixels carries ``CRPIX = 32.5``), and it can lie
+outside the array altogether, as it does in a cutout or a mosaic facet that
+kept its parent's reference.
+
 Celestial axes are sampled through the reference pixel of the *other* celestial
 axis, because a projected sky grid is not separable — a pixel's longitude
 depends on its latitude. Stepping right ascension by ``CDELT`` would be wrong by
@@ -80,8 +85,14 @@ Writing back out
 
 ``coord_names`` is given in python order and determines the output ``NAXISn``
 assignment — the list above produces ``RA`` as ``NAXIS1`` and ``STOKES`` as
-``NAXIS4``. Headers are rebuilt from the coordinates, so stale keywords from
+``NAXIS4``. Headers are rebuilt as they are written, so stale keywords from
 dropped axes do not survive.
+
+A ``data_slice`` moves the reference pixel with the data: ``CRPIX`` is
+renumbered by the slice's start and step and ``CDELT`` scaled by the step, while
+``CRVAL`` stays put, since cutting channels off the front does not change the
+world value the reference names. Every pixel you write therefore keeps the world
+coordinates it had in the input.
 
 ``write_to_fits`` will not replace an existing file unless you say so:
 
@@ -95,7 +106,8 @@ into place, so writing back over the file you opened is safe, and a write that
 fails part way leaves the previous contents alone. See :doc:`security`.
 
 A beam table that arrived as an extension of its own is written back beside the
-data, with its rows cut to match any ``data_slice``. Beams that came from
+data, with its rows cut to match any ``data_slice`` — including one that selects
+a single channel by integer index and so drops the spectral axis. Beams that came from
 ``BMAJ``/``BMIN``/``BPA`` header keywords need no extension — the header already
 carries them, and ``FitsData`` expanding a single beam over frequency is a model
 of this package's rather than something the file recorded.
