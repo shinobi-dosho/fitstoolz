@@ -406,4 +406,4 @@ Coverage rose from 84% to 99% (`reader.py` 79% → 99%, `utils.py` 88% → 98%,
 77 tests. astropy's WCS is the reference throughout: the coordinate grids are asserted
 against `wcs_pix2world` rather than against themselves.
 
-[0.1.0b3]: https://github.com/SpheMakh/fitstoolz/releases/tag/v0.1.0b3
+[0.1.0b3]: https://github.com/shinobi-dosho/fitstoolz/releases/tag/v0.1.0b3
