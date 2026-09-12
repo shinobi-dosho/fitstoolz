@@ -2,11 +2,6 @@
 fitstoolz
 ==========
 
-Please acknowledge this project and its contributors when using the work
-in research, and cite the associated publications and software release
-where applicable. This is a scholarly request, not an additional licence
-condition.
-
 |docs| |license| |python|
 
 Python libraries and command-line tools for interfacing with FITS data in an
@@ -16,6 +11,15 @@ FITS numbers its axes from one and writes them fastest-varying-first; numpy does
 neither. fitstoolz reads the WCS once, gives every axis a **name**, and lets you
 use that name everywhere — on the data, on the coordinates, and on the command
 line — so you never have to work out which convention applies where.
+
+Academic attribution
+--------------------
+
+Please acknowledge this project and its contributors when using the work
+in research, and cite the associated publications and software release
+where applicable. This is a scholarly request, not an additional licence
+condition.
+Citation information can be found in `CITATION.md <CITATION.md>`_.
 
 Origins
 -------
