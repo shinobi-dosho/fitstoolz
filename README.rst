@@ -12,6 +12,24 @@ neither. fitstoolz reads the WCS once, gives every axis a **name**, and lets you
 use that name everywhere — on the data, on the coordinates, and on the command
 line — so you never have to work out which convention applies where.
 
+Academic attribution
+--------------------
+
+Please acknowledge this project and its contributors when using the work
+in research, and cite the associated publications and software release
+where applicable. This is a scholarly request, not an additional licence
+condition.
+Citation information can be found in `CITATION.cff <CITATION.cff>`_.
+
+Origins
+-------
+
+fitstoolz is a partial rewrite of Owlcat's
+`Owlcat/FitsTool.py <https://github.com/ratt-ru/owlcat/blob/master/Owlcat/FitsTool.py>`_.
+Sphesihle Makhathini, a contributor to Owlcat, developed it into a standalone
+package to modernise and expand those FITS tools. Credit goes to the Owlcat
+contributors for the original work; see `NOTICE <NOTICE>`_ for attribution.
+
 Features
 --------
 
@@ -95,15 +113,15 @@ security problems**.
 License
 -------
 
-MIT — see `LICENSE <LICENSE>`_.
+Apache License 2.0 — see `LICENSE <LICENSE>`_ and `NOTICE <NOTICE>`_.
 
 .. |docs| image:: https://readthedocs.org/projects/fitstoolz/badge/?version=latest
     :target: https://fitstoolz.readthedocs.io/en/latest/
     :alt: Documentation status
 
-.. |license| image:: https://img.shields.io/badge/license-MIT-blue.svg
+.. |license| image:: https://img.shields.io/badge/license-Apache%202.0-blue.svg
     :target: LICENSE
-    :alt: MIT license
+    :alt: Apache License 2.0
 
 .. |python| image:: https://img.shields.io/badge/python-3.11%20%7C%203.12%20%7C%203.13-blue.svg
     :target: https://pypi.org/project/fitstoolz/

@@ -8,8 +8,8 @@ authors = [
 maintainers = [
     {name="Mika Naidoo", email="mika.naidoo25@gmail.com"},
 ]
-license = "MIT"
-license-files = ["LICENSE"]
+license = "Apache-2.0"
+license-files = ["LICENSE", "NOTICE"]
 readme = "README.rst"
 requires-python = ">=3.11,<3.14"
 dependencies = [
@@ -53,6 +53,7 @@ include = [
     "/tests",
     "/README.rst",
     "/LICENSE",
+    "/NOTICE",
     "/CHANGELOG.md",
     "/AGENTS.md",
     "/CONTRIBUTING.md",
