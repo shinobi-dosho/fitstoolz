@@ -12,6 +12,15 @@ neither. fitstoolz reads the WCS once, gives every axis a **name**, and lets you
 use that name everywhere — on the data, on the coordinates, and on the command
 line — so you never have to work out which convention applies where.
 
+Origins
+-------
+
+fitstoolz is a partial rewrite of Owlcat's
+`Owlcat/FitsTool.py <https://github.com/ratt-ru/owlcat/blob/master/Owlcat/FitsTool.py>`_.
+Sphesihle Makhathini, a contributor to Owlcat, developed it into a standalone
+package to modernise and expand those FITS tools. Credit goes to the Owlcat
+contributors for the original work; see `NOTICE <NOTICE>`_ for attribution.
+
 Features
 --------
 

@@ -24,3 +24,21 @@ where applicable. This is a scholarly request, not an additional licence
 condition.
 
 This NOTICE is informational and does not modify the Apache License, Version 2.0.
+
+Origins and attribution
+-----------------------
+fitstoolz is a partial rewrite of Owlcat's Owlcat/FitsTool.py:
+https://github.com/ratt-ru/owlcat/blob/master/Owlcat/FitsTool.py
+
+Sphesihle Makhathini, a contributor to Owlcat, developed fitstoolz to make
+those FITS tools standalone, modernise their implementation, and expand
+their functionality. We acknowledge the Owlcat contributors' original work.
+
+The upstream file carries the following copyright attribution:
+Copyright (C) 2002-2011
+The MeqTree Foundation &
+ASTRON (Netherlands Foundation for Research in Astronomy)
+P.O.Box 2, 7990 AA Dwingeloo, The Netherlands
+
+Owlcat's upstream file is distributed under GPL-2.0-or-later; this NOTICE
+does not change Owlcat's licence.
