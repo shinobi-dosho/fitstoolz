@@ -18,7 +18,7 @@ authors:
     given-names: "Athanaseus"
     email: "armaila@sarao.ac.za"
 version: "0.2.2"
-license: MIT
+license: Apache-2.0
 repository-code: "https://github.com/shinobi-dosho/fitstoolz"
 url: "https://fitstoolz.readthedocs.io"
 keywords:

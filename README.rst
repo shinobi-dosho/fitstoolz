@@ -95,15 +95,15 @@ security problems**.
 License
 -------
 
-MIT — see `LICENSE <LICENSE>`_.
+Apache License 2.0 — see `LICENSE <LICENSE>`_ and `NOTICE <NOTICE>`_.
 
 .. |docs| image:: https://readthedocs.org/projects/fitstoolz/badge/?version=latest
     :target: https://fitstoolz.readthedocs.io/en/latest/
     :alt: Documentation status
 
-.. |license| image:: https://img.shields.io/badge/license-MIT-blue.svg
+.. |license| image:: https://img.shields.io/badge/license-Apache%202.0-blue.svg
     :target: LICENSE
-    :alt: MIT license
+    :alt: Apache License 2.0
 
 .. |python| image:: https://img.shields.io/badge/python-3.11%20%7C%203.12%20%7C%203.13-blue.svg
     :target: https://pypi.org/project/fitstoolz/
