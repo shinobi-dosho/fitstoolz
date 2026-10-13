@@ -15,6 +15,8 @@ requires-python = ">=3.11,<3.14"
 dependencies = [
     "numpy>=2.0",
     "dask[array] >=2023.1.1",
+    # Dask uses fsspec; CVE-2026-104851 is fixed in 2026.6.0.
+    "fsspec>=2026.6.0",
     "xarray >=2023.01.0",
     # astropy owns the FITS and WCS parsing this package is built on, so its
     # floor is a security-relevant number, not just a compatibility one (see
