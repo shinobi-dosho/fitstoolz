@@ -203,6 +203,22 @@ pushes a `vX.Y.Z` tag; the `release.yml` workflow verifies the tag matches the
 package version, builds, tests, and publishes to PyPI. PyPI does not allow a
 version to be re-uploaded, even after deletion, so the tag check is a real gate.
 
+## Repository protection
+
+The active `main` branch ruleset lives in GitHub repository settings.
+[`.github/main-ruleset.json`](https://github.com/shinobi-dosho/fitstoolz/blob/main/.github/main-ruleset.json) records that policy;
+committing the file does not apply or update the setting. If the repository is
+recreated and has no ruleset, an admin can apply it once from the repository
+root:
+
+```bash
+gh api -X POST "repos/$(gh repo view --json nameWithOwner --jq .nameWithOwner)/rulesets" \
+  --input .github/main-ruleset.json
+```
+
+Check for an existing ruleset before running this command, because `POST`
+creates another one rather than updating the current rule.
+
 ## License
 
 By contributing, you agree that your contributions are licensed under the
