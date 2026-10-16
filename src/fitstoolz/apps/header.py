@@ -3,11 +3,10 @@ from __future__ import annotations
 from types import SimpleNamespace
 
 import click
-import shinobi
 from pydantic import Field
 
 from fitstoolz.apps import FitsOutputs
-from fitstoolz.apps._cli import make_command
+from fitstoolz.apps._cli import inputs_from_signature, make_command, optional_step
 from fitstoolz.utils import open_fits
 
 app = "header"
@@ -67,8 +66,7 @@ def runit(opts):
     return outfile
 
 
-@shinobi.pystep(name=app, info="Show, add, edit or remove FITS header entries")
-def header(
+def _header(
     fname: str = Field(..., description="Input file(s)"),
     show: bool = Field(False, description="Show header and exit"),
     edit: list[str] | None = Field(None, description="Edit FITS header entry, as KEY=VALUE"),
@@ -82,9 +80,14 @@ def header(
     return FitsOutputs(outfile=runit(opts))
 
 
-#: Uniform handle for this module's pystep, so the StepRef can be looked up
-#: generically (by the CLI group, tests, or a downstream shinobi/dosho caller)
-#: without knowing the function's own name.
-step = header
+inputs_model = inputs_from_signature(_header)
+INFO = "Show, add, edit or remove FITS header entries"
+command = make_command(_header, name=app, info=INFO, model=inputs_model, positional="fname")
 
-command = make_command(header, positional="fname")
+
+def __getattr__(name):
+    if name in ("header", "step"):
+        adapter = optional_step(_header, name=app, info=INFO)
+        globals()["header"] = globals()["step"] = adapter
+        return adapter
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

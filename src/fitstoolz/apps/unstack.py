@@ -2,11 +2,10 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
-import shinobi
 from pydantic import Field
 
 from fitstoolz.apps import FitsOutputs
-from fitstoolz.apps._cli import make_command
+from fitstoolz.apps._cli import inputs_from_signature, make_command, optional_step
 
 app = "unstack"
 
@@ -15,8 +14,7 @@ def runit(opts):
     raise NotImplementedError("'unstack' is not yet implemented")
 
 
-@shinobi.pystep(name=app, info="Unstack a FITS image along an axis")
-def unstack(
+def _unstack(
     fname: str = Field(..., description="Input file(s)"),
     axis: str = Field(..., description="Unstack the files along this axis"),
     ra_chunks: int | None = Field(None, description="RA chunking"),
@@ -30,9 +28,14 @@ def unstack(
     return FitsOutputs(outfile=runit(opts))
 
 
-#: Uniform handle for this module's pystep, so the StepRef can be looked up
-#: generically (by the CLI group, tests, or a downstream shinobi/dosho caller)
-#: without knowing the function's own name.
-step = unstack
+inputs_model = inputs_from_signature(_unstack)
+INFO = "Unstack a FITS image along an axis"
+command = make_command(_unstack, name=app, info=INFO, model=inputs_model, positional="fname")
 
-command = make_command(unstack, positional="fname")
+
+def __getattr__(name):
+    if name in ("unstack", "step"):
+        adapter = optional_step(_unstack, name=app, info=INFO)
+        globals()["unstack"] = globals()["step"] = adapter
+        return adapter
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

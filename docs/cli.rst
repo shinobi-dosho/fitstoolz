@@ -8,9 +8,10 @@ subcommand takes the input file as a positional argument, and every subcommand
 that writes takes either ``--outfile`` or ``--replace``.
 
 The options below are generated from each app's typed signature — the same
-pydantic model that defines the step when it is called from a
+typed function that defines the optional step when it is called from a
 `stimela-ninja <https://github.com/shinobi-dosho/stimela-ninja>`_ recipe. There
-is one schema, so the command line and the pipeline step cannot drift apart.
+is one schema. The native command line needs no Ninja installation; install
+``fitstoolz[ninja]`` for pipeline adapters.
 
 .. click:: fitstoolz.apps.main:cli
    :prog: fitstoolz

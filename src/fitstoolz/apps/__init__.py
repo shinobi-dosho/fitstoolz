@@ -1,7 +1,8 @@
 """The `fitstoolz` command-line apps, one module per subcommand.
 
-Each is a `@shinobi.pystep` plus a `click.Command` built from it by
-`_cli.make_command`; `main.py` assembles them into the one lazy group.
+Each native `click.Command` derives from a typed function through
+`_cli.make_command`; `main.py` assembles the lazy group. Named workflow
+steps and their uniform `step` aliases load only with the optional ninja extra.
 """
 
 from ._outputs import FitsOutputs, outfits_name

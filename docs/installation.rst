@@ -40,8 +40,8 @@ The project uses `uv <https://docs.astral.sh/uv/>`_:
     $ git clone https://github.com/shinobi-dosho/fitstoolz
     $ cd fitstoolz
     $ uv sync --group dev
-    $ .venv/bin/pytest
-    $ .venv/bin/ruff check src tests docs
+    $ uv run --group tests python -m pytest
+    $ uv run --group ruff ruff check src tests docs
 
     $ git config core.hooksPath .githooks   # enable the repo's pre-commit hook
 
@@ -60,3 +60,29 @@ To build the documentation locally:
     $ uv sync --group docs
     $ uv run sphinx-build -b html docs docs/_build/html
     $ open docs/_build/html/index.html
+
+Optional workflow integration
+-----------------------------
+
+The base installation includes the library and exposes all existing command
+names. ``unstack`` remains an unimplemented placeholder and raises
+``NotImplementedError`` when run.
+
+To use the existing Python steps in Ninja recipes or dosho:
+
+.. code-block:: console
+
+    $ uv pip install 'fitstoolz[ninja]'
+    $ ninja run fitstoolz.apps.stats:stats --help
+
+Named step exports and each module's ``step`` alias are loaded lazily. The
+``slice`` module retains the name ``slice_``. A missing Ninja installation
+produces an error explaining how to install the extra. The extra supports
+released ``stimela-ninja>=0.1.0b5``; development no longer overrides it with a
+floating Git checkout.
+
+Run optional integration tests with:
+
+.. code-block:: console
+
+    $ uv run --extra ninja --group tests python -m pytest tests/test_ninja.py

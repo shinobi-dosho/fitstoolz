@@ -8,6 +8,15 @@ major version is zero, a minor bump may carry breaking changes.
 
 ## [Unreleased]
 
+### Changed
+
+- Native CLI commands and application imports no longer require Stimela Ninja.
+  Install `fitstoolz[ninja]` for the existing named workflow steps and `step`
+  aliases, which now load lazily. Their typed schemas and outputs are preserved.
+- Removed the development override of Ninja to floating Git main; the optional
+  extra resolves published releases.
+
+
 ## [0.2.2] — 2026-08-04
 
 A review of everything since 0.2.0 found six defects, all silent or crashing.

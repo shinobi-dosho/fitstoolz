@@ -50,7 +50,7 @@ jobs:
         run: uv run --python ${{ matrix.python-version }} --locked --group tests ruff format --check --diff src tests docs
 
       - name: Run tests
-        run: uv run --python ${{ matrix.python-version }} --locked --group tests pytest -q --cov=fitstoolz --cov-report=term-missing
+        run: uv run --python ${{ matrix.python-version }} --locked --group tests python -m pytest -q --cov=fitstoolz --cov-report=term-missing
 
   audit:
     name: Dependency audit
@@ -80,3 +80,34 @@ jobs:
 
       - name: pip-audit
         run: uv run --locked --group audit pip-audit --no-deps --requirement requirements-audit.txt
+
+  wheel-install:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - kind: base
+            extra: ""
+          - kind: ninja
+            extra: "[ninja]"
+    steps:
+      - uses: actions/checkout@v7
+      - uses: astral-sh/setup-uv@v7
+        with:
+          python-version: "3.12"
+      - name: Build wheel
+        run: uv build --wheel --out-dir "$RUNNER_TEMP/wheels"
+      - name: Install declared wheel dependencies
+        run: |
+          uv venv "$RUNNER_TEMP/wheel-env"
+          wheels=("$RUNNER_TEMP"/wheels/*.whl)
+          uv pip install --python "$RUNNER_TEMP/wheel-env/bin/python" "${wheels[0]}${{ matrix.extra }}"
+      - name: Test installed wheel outside checkout
+        working-directory: ${{ runner.temp }}
+        run: >-
+          uv run --no-project --python "$RUNNER_TEMP/wheel-env/bin/python" python
+          "$GITHUB_WORKSPACE/scripts/check_wheel_install.py" "${{ matrix.kind }}"
+      - name: Test optional workflow integration
+        if: matrix.kind == 'ninja'
+        run: uv run --locked --extra ninja --group tests python -m pytest tests/test_ninja.py -q
