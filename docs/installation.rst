@@ -64,7 +64,10 @@ To build the documentation locally:
 Optional workflow integration
 -----------------------------
 
-The base installation includes the library and all seven native commands.
+The base installation includes the library and exposes all existing command
+names. ``unstack`` remains an unimplemented placeholder and raises
+``NotImplementedError`` when run.
+
 To use the existing Python steps in Ninja recipes or dosho:
 
 .. code-block:: console
