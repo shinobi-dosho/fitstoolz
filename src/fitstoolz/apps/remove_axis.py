@@ -3,12 +3,11 @@ from __future__ import annotations
 import logging
 from types import SimpleNamespace
 
-import shinobi
 from pydantic import Field
 
 from fitstoolz import LOGGER
 from fitstoolz.apps import FitsOutputs, outfits_name
-from fitstoolz.apps._cli import make_command
+from fitstoolz.apps._cli import inputs_from_signature, make_command, optional_step
 from fitstoolz.reader import FitsData
 
 app = "remove-axis"
@@ -38,8 +37,7 @@ def runit(opts):
     return outfits
 
 
-@shinobi.pystep(name=app, info="Remove an axis from a FITS image")
-def remove_axis(
+def _remove_axis(
     fname: str = Field(..., description="Input file(s)"),
     ctype: str = Field(
         ...,
@@ -63,9 +61,14 @@ def remove_axis(
     return FitsOutputs(outfile=runit(opts))
 
 
-#: Uniform handle for this module's pystep, so the StepRef can be looked up
-#: generically (by the CLI group, tests, or a downstream shinobi/dosho caller)
-#: without knowing the function's own name.
-step = remove_axis
+inputs_model = inputs_from_signature(_remove_axis)
+INFO = "Remove an axis from a FITS image"
+command = make_command(_remove_axis, name=app, info=INFO, model=inputs_model, positional="fname")
 
-command = make_command(remove_axis, positional="fname")
+
+def __getattr__(name):
+    if name in ("remove_axis", "step"):
+        adapter = optional_step(_remove_axis, name=app, info=INFO)
+        globals()["remove_axis"] = globals()["step"] = adapter
+        return adapter
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

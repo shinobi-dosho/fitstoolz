@@ -634,8 +634,12 @@ dependencies = [
     { name = "fsspec" },
     { name = "numpy" },
     { name = "pydantic" },
-    { name = "stimela-ninja" },
     { name = "xarray" },
+]
+
+[package.optional-dependencies]
+ninja = [
+    { name = "stimela-ninja" },
 ]
 
 [package.dev-dependencies]
@@ -674,9 +678,10 @@ requires-dist = [
     { name = "fsspec", specifier = ">=2026.6.0" },
     { name = "numpy", specifier = ">=2.0" },
     { name = "pydantic", specifier = ">=2.6" },
-    { name = "stimela-ninja", git = "https://github.com/shinobi-dosho/stimela-ninja?branch=main" },
+    { name = "stimela-ninja", marker = "extra == 'ninja'", specifier = ">=0.1.0b5" },
     { name = "xarray", specifier = ">=2023.1.0" },
 ]
+provides-extras = ["ninja"]
 
 [package.metadata.requires-dev]
 audit = [{ name = "pip-audit", specifier = ">=2.7" }]
@@ -2686,7 +2691,7 @@ wheels = [
 [[package]]
 name = "stimela-ninja"
 version = "0.1.0b5"
-source = { git = "https://github.com/shinobi-dosho/stimela-ninja?branch=main#85fcf8afa9864472f5f01b705240460097f5dc89" }
+source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "click" },
     { name = "packaging" },
@@ -2694,6 +2699,10 @@ dependencies = [
     { name = "pydantic-settings" },
     { name = "pyyaml" },
     { name = "rich" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/09/e1/e02e6e9b5970dafab512309e11d0223828da0cb7b603c430c601b73a8e8b/stimela_ninja-0.1.0b5.tar.gz", hash = "sha256:6c24183ede38cca2ab12c086d8bef597d46af68c30b12c3f4f9de2c4594f8928", size = 235467, upload-time = "2026-07-31T21:34:20.009Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/46/92/ded4620cfb1498892efdfdb0c0710d0c9aba3694b7762e425e50acd42dda/stimela_ninja-0.1.0b5-py3-none-any.whl", hash = "sha256:50a98053ec4aedf1b916fb7ff1c63c972e0e793396c6e9fba359f3d816042bc6", size = 231917, upload-time = "2026-07-31T21:34:18.61Z" },
 ]
 
 [[package]]

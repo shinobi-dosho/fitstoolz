@@ -187,40 +187,25 @@ HDU, and both `FitsData.__init__` and `expand_along_axis_from_files` go through
 it. There were two `da.asarray(hdu.data)` call sites and each had to be found
 separately; keep it to one.
 
-## Apps: one module, one pystep, four names
+## Apps: one typed function, native command, optional workflow adapter
 
-Every module in `src/fitstoolz/apps/` follows the same shape, and the CLI relies
-on it:
+Every module in `src/fitstoolz/apps/` keeps its schema on a private typed
+function with pydantic `Field` defaults. `_cli.inputs_from_signature` derives
+its `inputs_model`, and `_cli.make_command` builds the native Click `command`
+from that model. Keep `app` as the subcommand name and `runit(opts)` as the
+plain namespace-based work function. Typed output models remain the outputs
+that recipes can wire to.
 
-```python
-app = "stack"                                  # subcommand name
+The native CLI and `runit` imports must work without shinobi. A module's
+`__getattr__` exports its existing named step (including `slice_`) and the
+uniform `step` alias lazily, caching one real `shinobi.pystep` for both names.
+Only requesting that adapter imports shinobi; a missing dependency should
+explain how to install `fitstoolz[ninja]`.
 
-class StackOutputs(BaseModel): ...             # typed outputs (optional but preferred)
-
-def runit(opts): ...                           # plain function, takes a namespace
-
-@shinobi.pystep(name=app, info="...")
-def stack(fname: str = Field(...), ...) -> StackOutputs:
-    opts = SimpleNamespace(**locals())
-    return StackOutputs(stacked_fits=runit(opts))
-
-step = stack                                   # uniform handle
-command = make_command(stack, positional="fname")
-```
-
-- **The pystep signature is the single schema authority.** Click options are
-  generated from the pydantic model by `shinobi.clickutil.build_options`. There
-  are no YAML parameter files — those were removed when the CLI moved off scabha,
-  and re-adding a parallel schema is exactly the regression to avoid. If an
-  option needs a description, a default, or a choice list, it goes on the
-  `Field`.
-- **`runit` is a plain function**, not a `click.Command`. That keeps the real
-  work importable and testable without click's runner in the way.
-- **`step` and `command` are uniform names** so a caller — the CLI group, a test,
-  a downstream shinobi recipe or dosho tool — can find them without knowing the
-  function's own name.
-- **Outputs are a pydantic model**, so a following recipe step can be wired to
-  `stacked_fits` or `std` rather than re-deriving it from a filename convention.
+**The function signature is the single schema authority.** There are no YAML
+parameter files. Defaults, descriptions and CLI abbreviations belong on its
+`Field` declarations; do not add a parallel option schema. Both the native
+command and optional adapter derive their input models from the same function.
 
 ### Registering a new app
 
@@ -230,8 +215,7 @@ only ever do so against that hardcoded table (see `SECURITY.md`). Never build th
 import path from user input.
 
 The laziness is worth preserving — it's why `fitstoolz --help` doesn't import
-dask, xarray and astropy — so keep module-level work in an app to the pystep
-declaration itself.
+dask, xarray and astropy — so keep module-level work in an app to the native schema and command declarations.
 
 ## Opening files
 
@@ -257,7 +241,7 @@ silently destroy an input.
 
 - **An axis-order configuration option.** The order is numpy's, internally, and
   FITS's, on disk. A third choice is a bug generator.
-- **A second schema format.** Parameters are pydantic `Field`s on the pystep.
+- **A second schema format.** Parameters are pydantic `Field`s on the typed function.
 - **Eager `.compute()` in `FitsData`.** Reductions belong to the caller.
 - **A parallel FITS reader.** `FitsData` is the reader; apps use it. `header` is
   the one app that touches `astropy.io.fits` structures directly, because it
@@ -271,38 +255,17 @@ present in the repo.
 
 ## Attribution: commit trailers yes, PR trailers no
 
-A commit made with an assistant's help says so in a trailer on the
-**commit message**. Use whatever trailer the agent emits by default --
-Claude Code, for instance, ends a commit with
+Commits made with an assistant's help carry this trailer at the end of the
+commit message:
 
 ```
-Co-Authored-By: Claude <noreply@anthropic.com>
+Assisted-by: <AGENT> <MODEL>
 ```
 
-An agent with no default of its own uses the same form, naming itself and
-the model behind it, with an address:
+Do not include an address. The trailer records assistance without creating
+GitHub co-authorship. Follow the organisation-wide attribution rule linked
+above.
 
-```
-Co-authored-by: <AGENT> <MODEL> <EMAIL>
-```
-
-— e.g. `Co-authored-by: Codex GPT-5 <noreply@openai.com>`. One line, last
-in the message, after any `Co-authored-by:` for real people. The address
-is not decoration: GitHub only renders a trailer as co-authorship when it
-carries an `<email>`, so without one the credit stays plain text in the
-message body. Credit is the point — these tools do real work here, and
-the history should say so.
-
-**Pull request descriptions carry no trailer at all** — no
-`Co-authored-by:`, no "Generated with", no tool badge. A PR body is
-review material: it exists to tell a reviewer what changed and why, and
-what to check. Provenance already lives on every commit the PR contains,
-where it is attached to the specific change rather than repeated once
-per PR, so a trailer in the description is duplication in the one place
-that has no room for it. Agents default to adding one; delete it.
-
-Neither form is a substitute for the message itself. A commit that
-explains a decision badly does not improve by naming the model that
-helped make it — see the existing history for the standard: what
-changed, what it deviates from and why, and what a reviewer should not
-assume held still.
+**Pull request descriptions carry no trailer at all** — no `Assisted-by:`,
+`Co-authored-by:`, "Generated with", or tool badge. A PR body tells a reviewer
+what changed, why, and what to check; assistance is recorded on the commits.

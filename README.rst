@@ -39,7 +39,7 @@ Features
   approximated by stepping ``CDELT``
 * `Xarray support <https://docs.xarray.dev/en/stable/index.html>`_
 * `Zarr support <https://zarr.readthedocs.io/en/stable/index.html>`_
-* A ``fitstoolz`` command line whose subcommands double as
+* A native ``fitstoolz`` command line; install ``fitstoolz[ninja]`` to use its subcommands as
   `stimela-ninja <https://github.com/shinobi-dosho/stimela-ninja>`_ pipeline steps
 
 Installation

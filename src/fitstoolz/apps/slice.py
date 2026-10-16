@@ -2,11 +2,10 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
-import shinobi
 from pydantic import Field
 
 from fitstoolz.apps import FitsOutputs, outfits_name
-from fitstoolz.apps._cli import make_command
+from fitstoolz.apps._cli import inputs_from_signature, make_command, optional_step
 from fitstoolz.reader import FitsData
 
 app = "slice"
@@ -37,8 +36,7 @@ def runit(opts):
     return outfits
 
 
-@shinobi.pystep(name=app, info="Slice a FITS image along one or more axes")
-def slice_(
+def _slice(
     fname: str = Field(..., description="Input file(s)"),
     axis: list[str] | None = Field(None, description="Axis slicing info, as CTYPE,START,END"),
     memmap: bool = Field(True, description="memmap option to pass to astropy.io.fits.open()"),
@@ -53,9 +51,14 @@ def slice_(
     return FitsOutputs(outfile=runit(opts))
 
 
-#: Uniform handle for this module's pystep, so the StepRef can be looked up
-#: generically (by the CLI group, tests, or a downstream shinobi/dosho caller)
-#: without knowing the function's own name.
-step = slice_
+inputs_model = inputs_from_signature(_slice)
+INFO = "Slice a FITS image along one or more axes"
+command = make_command(_slice, name=app, info=INFO, model=inputs_model, positional="fname")
 
-command = make_command(slice_, positional="fname")
+
+def __getattr__(name):
+    if name in ("slice_", "step"):
+        adapter = optional_step(_slice, name=app, info=INFO)
+        globals()["slice_"] = globals()["step"] = adapter
+        return adapter
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

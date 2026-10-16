@@ -1,28 +1,77 @@
-"""Build a `click.Command` from a `@shinobi.pystep` StepRef.
-
-Replaces scabha's `clickify_parameters` + YAML parser configs: options are
-derived from the step's pydantic ``inputs_model`` by shinobi's
-``build_options`` (dtype, choices, abbreviations, bool/list handling), so a
-step's signature is the single schema authority. Mirrors simms 3.0's
-``simms.apps.main._make_command``.
-
-This module is also fitstoolz's *application* layer, and so the one place
-that configures logging. The package itself only ever calls
-``logging.getLogger`` (see `fitstoolz._package`), the same library/application
-split shinobi keeps -- ``shinobi.logsetup`` attaches shinobi's file handler
-from the CLI and nothing in the package touches a handler. ``set_logger``
-used to live in fitstoolz's package initializer and did both jobs at once.
-"""
+"""Build native Click commands and optional workflow adapters from typed functions."""
 
 from __future__ import annotations
 
+import inspect
 import logging
+import types
+from typing import Annotated, Literal, Union, get_args, get_origin, get_type_hints
 
 import click
-from shinobi.clickutil import build_options, unflatten_kwargs
-from shinobi.steps.dispatch import _dispatch
+from pydantic import ConfigDict, create_model
 
 from fitstoolz import LOGGER
+
+
+def inputs_from_signature(func):
+    """Keep defaults, validators and descriptions in the function signature."""
+    hints = get_type_hints(func, include_extras=True)
+    fields = {name: (hints[name], param.default) for name, param in inspect.signature(func).parameters.items()}
+    return create_model(f"{func.__name__}Inputs", __config__=ConfigDict(extra="forbid"), **fields)
+
+
+def _leaves(annotation):
+    origin = get_origin(annotation)
+    if origin is Annotated:
+        return _leaves(get_args(annotation)[0])
+    if origin in (Union, types.UnionType, list, tuple):
+        return [leaf for arg in get_args(annotation) if arg is not type(None) for leaf in _leaves(arg)]
+    return [annotation]
+
+
+def _is_list(annotation):
+    origin = get_origin(annotation)
+    if origin in (Union, types.UnionType):
+        return all(_is_list(arg) for arg in get_args(annotation) if arg is not type(None))
+    return origin in (list, tuple)
+
+
+def build_options(model):
+    """Render fitstoolz's flat schemas as Click options, including their short aliases."""
+    options = []
+    for name, field in model.model_fields.items():
+        default = None if field.is_required() else field.default
+        leaves = _leaves(field.annotation)
+        multiple = _is_list(field.annotation)
+        flag = "--" + name.replace("_", "-")
+        kwargs = {"required": field.is_required(), "help": field.description}
+        if bool in leaves and not multiple:
+            flag += "/--no-" + name.replace("_", "-")
+            kwargs.update(is_flag=True, default=bool(default))
+        else:
+            choices = next((get_args(leaf) for leaf in leaves if get_origin(leaf) is Literal), None)
+            scalars = set(leaves) & {str, int, float, bool}
+            scalar = next(iter(scalars)) if len(scalars) == 1 else str
+            kwargs.update(type=click.Choice(choices) if choices else scalar, multiple=multiple)
+            if default is not None:
+                kwargs["default"] = default
+        metadata = field.json_schema_extra or {}
+        abbrev = metadata.get("abbreviation")
+        options.append(click.Option([flag, *(["-" + abbrev] if abbrev else [])], **kwargs))
+    return options
+
+
+def optional_step(func, *, name, info):
+    """Load the optional workflow adapter only when its public export is requested."""
+    try:
+        from shinobi import pystep
+    except ModuleNotFoundError as exc:
+        if exc.name != "shinobi":
+            raise
+        raise ImportError(
+            "The workflow adapter requires fitstoolz[ninja]; install it with uv pip install 'fitstoolz[ninja]'."
+        ) from exc
+    return pystep(name=name, info=info)(func)
 
 
 def configure_logging(level: str | int = "INFO") -> None:
@@ -54,27 +103,12 @@ def configure_logging(level: str | int = "INFO") -> None:
         handler.setLevel(level)
 
 
-def make_command(step, *, positional: str | None = None, extra_options=()) -> click.Command:
-    """Build a `click.Command` for a `@shinobi.pystep` StepRef.
-
-    Args:
-        step: The `StepRef` produced by `@shinobi.pystep`.
-        positional: Name of the input field to render as a `click.Argument`
-            rather than an option (``build_options`` only emits ``--options``).
-            This is the scabha ``policies.positional`` equivalent.
-        extra_options: Extra `click.Parameter`s to prepend (eager flags etc.).
-
-    Returns:
-        A `click.Command` whose callback re-nests the flat kwargs and
-        dispatches the step in-process via shinobi, exactly as
-        `shinobi.cli`'s ``run`` command does. ``log_level`` is dropped from
-        the options and taken from the root group instead.
-    """
-    model = step.step.inputs_model
-    options = [opt for opt in build_options(model) if opt.name != "log_level"]
-
+def make_command(func, *, name, info, model, positional: str | None = None, extra_options=()) -> click.Command:
+    """Build a native command from a typed application function and its generated model."""
     params = list(extra_options)
-    for opt in options:
+    for opt in build_options(model):
+        if opt.name == "log_level":
+            continue
         if opt.name == positional:
             params.append(click.Argument([positional], required=True, type=opt.type))
         else:
@@ -82,18 +116,10 @@ def make_command(step, *, positional: str | None = None, extra_options=()) -> cl
 
     def _callback(**raw):
         ctx = click.get_current_context()
-        kwargs = unflatten_kwargs(model, raw)
+        kwargs = {key: value for key, value in raw.items() if value is not None and value != ()}
         kwargs["log_level"] = ctx.obj["log_level"]
-        # Before dispatch, so anything the step logs on its way in is carried.
         configure_logging(kwargs["log_level"])
-        result = _dispatch(step.step, step.func, **kwargs)
-        if not result.success:
-            raise click.ClickException(f"{step.step.name!r} failed (returncode {result.returncode}).")
+        validated = model(**kwargs)
+        return func(**{key: getattr(validated, key) for key in model.model_fields})
 
-    return click.Command(
-        name=step.step.name,
-        params=params,
-        callback=_callback,
-        help=step.step.info,
-        no_args_is_help=True,
-    )
+    return click.Command(name=name, params=params, callback=_callback, help=info, no_args_is_help=True)

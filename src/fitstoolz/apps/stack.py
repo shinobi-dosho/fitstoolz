@@ -3,11 +3,10 @@ from __future__ import annotations
 import logging
 from types import SimpleNamespace
 
-import shinobi
 from pydantic import BaseModel, Field
 
 from fitstoolz import LOGGER
-from fitstoolz.apps._cli import make_command
+from fitstoolz.apps._cli import inputs_from_signature, make_command, optional_step
 from fitstoolz.reader import FitsData
 
 app = "stack"
@@ -37,8 +36,7 @@ def runit(opts):
     return opts.stacked_fits
 
 
-@shinobi.pystep(name=app, info="Stack FITS images along an axis")
-def stack(
+def _stack(
     fname: str = Field(..., description="Input file(s)"),
     axis: str = Field(..., description="Stack files along this axis"),
     extra_files: list[str] | None = Field(None, description="Additional files to stack (use multiple times)"),
@@ -52,9 +50,14 @@ def stack(
     return StackOutputs(stacked_fits=runit(opts))
 
 
-#: Uniform handle for this module's pystep, so the StepRef can be looked up
-#: generically (by the CLI group, tests, or a downstream shinobi/dosho caller)
-#: without knowing the function's own name.
-step = stack
+inputs_model = inputs_from_signature(_stack)
+INFO = "Stack FITS images along an axis"
+command = make_command(_stack, name=app, info=INFO, model=inputs_model, positional="fname")
 
-command = make_command(stack, positional="fname")
+
+def __getattr__(name):
+    if name in ("stack", "step"):
+        adapter = optional_step(_stack, name=app, info=INFO)
+        globals()["stack"] = globals()["step"] = adapter
+        return adapter
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

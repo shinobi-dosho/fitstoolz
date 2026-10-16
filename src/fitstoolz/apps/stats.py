@@ -5,11 +5,10 @@ from types import SimpleNamespace
 
 import dask.array as da
 import numpy as np
-import shinobi
 from pydantic import BaseModel, Field
 
 from fitstoolz import LOGGER
-from fitstoolz.apps._cli import make_command
+from fitstoolz.apps._cli import inputs_from_signature, make_command, optional_step
 from fitstoolz.reader import FitsData
 
 app = "stats"
@@ -61,8 +60,7 @@ def runit(opts):
     return StatsOutputs(min=float(dmin), max=float(dmax), mean=float(dmean), std=float(dstd))
 
 
-@shinobi.pystep(name=app, info="Get image statistics")
-def stats(
+def _stats(
     fname: str = Field(..., description="Input file(s)"),
     show: bool = Field(False, description="Show min, max, mean and standard deviation"),
     slice: list[str] | None = Field(None, description="Slice data, as CTYPE,START,END"),
@@ -78,9 +76,14 @@ def stats(
     return runit(opts)
 
 
-#: Uniform handle for this module's pystep, so the StepRef can be looked up
-#: generically (by the CLI group, tests, or a downstream shinobi/dosho caller)
-#: without knowing the function's own name.
-step = stats
+inputs_model = inputs_from_signature(_stats)
+INFO = "Get image statistics"
+command = make_command(_stats, name=app, info=INFO, model=inputs_model, positional="fname")
 
-command = make_command(stats, positional="fname")
+
+def __getattr__(name):
+    if name in ("stats", "step"):
+        adapter = optional_step(_stats, name=app, info=INFO)
+        globals()["stats"] = globals()["step"] = adapter
+        return adapter
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")

@@ -3,12 +3,11 @@ from __future__ import annotations
 import logging
 from types import SimpleNamespace
 
-import shinobi
 from pydantic import Field
 
 from fitstoolz import LOGGER
 from fitstoolz.apps import FitsOutputs, outfits_name
-from fitstoolz.apps._cli import make_command
+from fitstoolz.apps._cli import inputs_from_signature, make_command, optional_step
 from fitstoolz.reader import FitsData
 
 app = "add-axis"
@@ -36,8 +35,7 @@ def runit(opts):
     return outfits
 
 
-@shinobi.pystep(name=app, info="Add an axis to a FITS image")
-def add_axis(
+def _add_axis(
     fname: str = Field(..., description="Input file(s)"),
     ctype: str = Field(..., description="Axis type; FREQ, STOKES, etc."),
     index: int = Field(..., description="Add axis at this dimension index"),
@@ -56,9 +54,14 @@ def add_axis(
     return FitsOutputs(outfile=runit(opts))
 
 
-#: Uniform handle for this module's pystep, so the StepRef can be looked up
-#: generically (by the CLI group, tests, or a downstream shinobi/dosho caller)
-#: without knowing the function's own name.
-step = add_axis
+inputs_model = inputs_from_signature(_add_axis)
+INFO = "Add an axis to a FITS image"
+command = make_command(_add_axis, name=app, info=INFO, model=inputs_model, positional="fname")
 
-command = make_command(add_axis, positional="fname")
+
+def __getattr__(name):
+    if name in ("add_axis", "step"):
+        adapter = optional_step(_add_axis, name=app, info=INFO)
+        globals()["add_axis"] = globals()["step"] = adapter
+        return adapter
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
