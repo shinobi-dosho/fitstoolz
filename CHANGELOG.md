@@ -8,6 +8,18 @@ major version is zero, a minor bump may carry breaking changes.
 
 ## [Unreleased]
 
+## [0.2.2] — 2026-10-16
+
+A review of everything since 0.2.0 found six defects, all silent or crashing.
+Three of them are about the same misconception — that `CRPIX` is an index into
+the coordinate grid — and one is a regression from the beam preservation added
+in 0.2.0.
+
+### Added
+
+- Implemented `unstack` as numbered FITS outputs along a named axis, retaining
+  that axis at length one and returning the ordered paths to recipe callers.
+
 ### Changed
 
 - Native CLI commands and application imports no longer require Stimela Ninja.
@@ -16,15 +28,10 @@ major version is zero, a minor bump may carry breaking changes.
 - Removed the development override of Ninja to floating Git main; the optional
   extra resolves published releases.
 
-
-## [0.2.2] — 2026-08-04
-
-A review of everything since 0.2.0 found six defects, all silent or crashing.
-Three of them are about the same misconception — that `CRPIX` is an index into
-the coordinate grid — and one is a regression from the beam preservation added
-in 0.2.0.
-
 ### Fixed
+
+- Corrected STOKES coordinates for fractional and off-array reference pixels,
+  and kept repeated sliced writes from shifting the source header.
 
 - **`slice` no longer mislabels every channel it writes.** `write_to_fits` built
   `CRPIX`/`CRVAL` from the *unsliced* coordinates, so slicing channels 2–5 of a

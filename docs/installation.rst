@@ -64,9 +64,10 @@ To build the documentation locally:
 Optional workflow integration
 -----------------------------
 
-The base installation includes the library and exposes all existing command
-names. ``unstack`` remains an unimplemented placeholder and raises
-``NotImplementedError`` when run.
+The base installation includes the library and all seven native commands.
+``unstack`` splits a named axis into numbered, length-one FITS outputs under
+the required ``--output-prefix``; see :doc:`cli` for output naming and overwrite
+behavior.
 
 To use the existing Python steps in Ninja recipes or dosho:
 
