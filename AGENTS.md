@@ -255,16 +255,18 @@ present in the repo.
 
 ## Attribution: commit trailers yes, PR trailers no
 
-Commits made with an assistant's help carry this trailer at the end of the
-commit message:
+Commits made with an assistant's help carry one trailer, last in the commit
+message and after any `Co-authored-by:` trailers for real people:
 
 ```
 Assisted-by: <AGENT> <MODEL>
 ```
 
-Do not include an address. The trailer records assistance without creating
-GitHub co-authorship. Follow the organisation-wide attribution rule linked
-above.
+Do not include an address. Replace any assistant-generated `Co-authored-by:`
+trailer with `Assisted-by:`; an address would make GitHub render the assistant
+as a co-author. The trailer records assistance while ownership stays with the
+person who commits the change. Follow the organisation-wide attribution rule
+linked above.
 
 **Pull request descriptions carry no trailer at all** — no `Assisted-by:`,
 `Co-authored-by:`, "Generated with", or tool badge. A PR body tells a reviewer

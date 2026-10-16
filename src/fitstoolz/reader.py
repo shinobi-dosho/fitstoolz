@@ -284,14 +284,11 @@ class FitsData:
         """
 
         idx = self.coord_index(coord_name)
-        crval = int(self.header.get(f"CRVAL{self.ndim - idx}", 1))
-        crpix = int(self.header.get(f"CRPIX{self.ndim - idx}", 1))
-        cdelt = int(self.header.get(f"CDELT{self.ndim - idx}", 1))
+        crval = float(self.header.get(f"CRVAL{self.ndim - idx}", 1))
+        crpix = float(self.header.get(f"CRPIX{self.ndim - idx}", 1))
+        cdelt = float(self.header.get(f"CDELT{self.ndim - idx}", 1))
         naxis = int(self.header.get(f"NAXIS{self.ndim - idx}"))
-        size = cdelt * naxis
-        grid = np.arange(0, size, cdelt)
-        shift = grid[crpix - 1] + crval
-        grid += shift
+        grid = crval + (np.arange(naxis) - (crpix - 1)) * cdelt
 
         self.coords[coord_name] = ("stokes",), grid
         self.set_coord_attrs(coord_name, "stokes")
@@ -878,7 +875,9 @@ class FitsData:
         chunks = chunks or {}
         out_ndim = len(coord_names)
 
-        header = fits.Header(self.header)
+        # Header(existing_header) shares cards; repeated sliced writes would
+        # then accumulate CRPIX offsets in the source header itself.
+        header = self.header.copy()
         header["NAXIS"] = out_ndim
 
         # The output is always a primary HDU, so the input's extension identity

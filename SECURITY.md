@@ -123,8 +123,14 @@ crash can leave the temporary behind. The pid is in the name so that two
 processes writing the same destination do not interleave in one staging file;
 they still race for the destination itself, and the last rename wins.
 
-`stack` and `stats` are the exceptions to the shape, not the rule: `stack`
-requires `--stacked-fits`, and `stats` writes nothing at all.
+`stack` requires `--stacked-fits`. `unstack` requires `--output-prefix` and writes
+`<prefix>-0000.fits`, `<prefix>-0001.fits`, etc., overwriting those destinations.
+It strips a trailing `.fits` from the prefix and pads zero-based pixel indices
+to at least four digits. All destinations are checked against the input before
+the first write, including symlink and hard-link aliases, because lazy reads
+reopen the source for each output. Individual writes are atomic; the collection
+is not a transaction, so a later failure can leave earlier outputs in place.
+`stats` writes nothing at all.
 
 ### Header edits are data, never code
 

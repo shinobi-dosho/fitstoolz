@@ -152,10 +152,19 @@ The same operations are available as subcommands:
     $ fitstoolz stats image.fits --show
     $ fitstoolz slice image.fits --axis FREQ,0,64 --outfile cube-sub.fits
     $ fitstoolz stack chan0.fits --axis FREQ --extra-files chan1.fits --stacked-fits cube.fits
+    $ fitstoolz unstack cube.fits --axis FREQ --output-prefix channel
     $ fitstoolz add-axis image.fits --ctype STOKES --index 4 --outfile with-stokes.fits
 
-Apps that write take either ``--outfile PATH`` or ``--replace`` (edit the input
-in place). Give neither and the command fails rather than guessing a filename.
+Apps that write modified copies take either ``--outfile PATH`` or ``--replace``
+(edit the input in place). ``stack`` requires ``--stacked-fits PATH``.
+``unstack`` requires ``--output-prefix PATH`` and a named ``--axis``; the command
+above writes ``channel-0000.fits``, ``channel-0001.fits``, and so on in zero-based
+pixel order, keeping FREQ at length one. A trailing ``.fits`` on the prefix is
+stripped, and indices have at least four digits. Existing generated outputs
+are overwritten; any output that aliases the input is rejected before writing.
+Create the prefix's parent directory first. Each output is written atomically,
+so a later failure can leave earlier outputs in place. Recipe callers receive
+the ordered paths in ``result.outputs.unstacked_fits``.
 
 See :doc:`cli` for the full generated reference.
 

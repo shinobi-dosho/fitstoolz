@@ -182,13 +182,6 @@ def test_app_inputs_models():
         assert "log_level" in fields
 
 
-def test_unstack_not_implemented(config: InitTest):
-    runner = CliRunner()
-    result = runner.invoke(main_group.cli, f"unstack --axis FREQ {config.example_fits_file()}")
-    assert result.exit_code != 0
-    assert isinstance(result.exception, NotImplementedError)
-
-
 def test_stats_show_slice_and_clipping(config: InitTest):
     """Exercise --show, --slice and both clip options with an explicit blank value."""
     image_file = config.example_fits_file()
