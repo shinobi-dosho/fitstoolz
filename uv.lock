@@ -834,7 +834,7 @@ name = "importlib-metadata"
 version = "8.7.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
-    { name = "zipp", marker = "python_full_version < '3.12'" },
+    { name = "zipp" },
 ]
 sdist = { url = "https://files.pythonhosted.org/packages/76/66/650a33bd90f786193e4de4b3ad86ea60b53c89b669a5c7be931fac31cdb0/importlib_metadata-8.7.0.tar.gz", hash = "sha256:d13b81ad223b890aa16c5471f2ac3056cf76c5f10f82d6f9292f0b415f389000", size = 56641, upload-time = "2025-04-27T15:29:01.736Z" }
 wheels = [
@@ -2690,7 +2690,7 @@ wheels = [
 
 [[package]]
 name = "stimela-ninja"
-version = "0.1.0b5"
+version = "0.1.0b7"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "click" },
@@ -2700,9 +2700,9 @@ dependencies = [
     { name = "pyyaml" },
     { name = "rich" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/09/e1/e02e6e9b5970dafab512309e11d0223828da0cb7b603c430c601b73a8e8b/stimela_ninja-0.1.0b5.tar.gz", hash = "sha256:6c24183ede38cca2ab12c086d8bef597d46af68c30b12c3f4f9de2c4594f8928", size = 235467, upload-time = "2026-07-31T21:34:20.009Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/cf/d9/3deedb542f2594c0ed401f96f71b057ca60abf3546196f68f6ca4948d999/stimela_ninja-0.1.0b7.tar.gz", hash = "sha256:5e1c657f0ef54a972a15cb8028758aab094fde0b907984e88b1269714794b81a", size = 401541, upload-time = "2026-09-22T19:38:53.769Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/46/92/ded4620cfb1498892efdfdb0c0710d0c9aba3694b7762e425e50acd42dda/stimela_ninja-0.1.0b5-py3-none-any.whl", hash = "sha256:50a98053ec4aedf1b916fb7ff1c63c972e0e793396c6e9fba359f3d816042bc6", size = 231917, upload-time = "2026-07-31T21:34:18.61Z" },
+    { url = "https://files.pythonhosted.org/packages/95/9b/6bfe7359e3188016f3c40c295bf8229de815634ce6c936ef184d5b8dedcf/stimela_ninja-0.1.0b7-py3-none-any.whl", hash = "sha256:4ed8b74f4e8f423da3804943494ed10c5ac66e1ccb4c4318cf0cde6c1a2ea0da", size = 403213, upload-time = "2026-09-22T19:38:52.413Z" },
 ]
 
 [[package]]
